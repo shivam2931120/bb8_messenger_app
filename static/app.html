@@ -4,6 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" type="image/x-icon" href="/static/favicon.ico">
     <title>BB84 Quantum Chat</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -488,6 +489,7 @@
     <script defer>
         document.addEventListener("DOMContentLoaded", () => {
             const socket = io({
+                transports: ['polling'], upgrade: false,
                 transports: ['polling', 'websocket'],
                 reconnection: true,
                 reconnectionDelay: 1000,
@@ -795,7 +797,7 @@
                         unreadBadge.classList.add("hidden");
                     }
                     li.appendChild(unreadBadge);
-                    
+
                     li.onclick = () => {
                         if (currentRecipient === user) return;
                         currentRecipient = user;
@@ -805,7 +807,7 @@
                         byId("messages").innerHTML = "";
                         byId("chat-window").style.display = "flex";
                         socket.emit("get_history", { user1: username, user2: currentRecipient });
-                        
+
                         // Mark messages as read
                         socket.emit("mark_as_read", { reader: username, sender: currentRecipient });
                         unreadCounts[user] = 0;
@@ -852,7 +854,7 @@
 
                 // if it's an incoming message from other user, mark delivered and notify
                 if (data.sender !== username) {
-                    try { socket.emit("message_delivered", { id: data.id }); } catch (e) {}
+                    try { socket.emit("message_delivered", { id: data.id }); } catch (e) { }
                     byId("notification-sound").play().catch(e => console.log("Audio play failed:", e));
                     if (Notification.permission === "granted" && !document.hasFocus()) {
                         try {
@@ -950,9 +952,9 @@
                 const threshold = 0.15;
 
                 // prepare qubits
-                const bits = Array.from({length: N}, ()=> Math.random() < 0.5 ? 0 : 1);
-                const bases = Array.from({length: N}, ()=> Math.random() < 0.5 ? '+' : 'x');
-                const qubits = bits.map((b,i)=>({i, bit: b, basis: bases[i]}));
+                const bits = Array.from({ length: N }, () => Math.random() < 0.5 ? 0 : 1);
+                const bases = Array.from({ length: N }, () => Math.random() < 0.5 ? '+' : 'x');
+                const qubits = bits.map((b, i) => ({ i, bit: b, basis: bases[i] }));
 
                 // keep local state
                 window._bb84 = window._bb84 || {};
@@ -971,8 +973,8 @@
                     const qubits = payload.qubits || [];
                     const N = qubits.length;
                     // choose measurement bases
-                    const meas_bases = Array.from({length: N}, ()=> Math.random() < 0.5 ? '+' : 'x');
-                    const measured = qubits.map((q,i)=> {
+                    const meas_bases = Array.from({ length: N }, () => Math.random() < 0.5 ? '+' : 'x');
+                    const measured = qubits.map((q, i) => {
                         if (meas_bases[i] === q.basis) return q.bit;
                         return Math.random() < 0.5 ? 0 : 1;
                     });
@@ -1028,7 +1030,7 @@
                     const receiver_bases = their_bases;
                     // matched indices
                     const matched = [];
-                    for (let i=0;i<state.N;i++){
+                    for (let i = 0; i < state.N; i++) {
                         if (initiator_bases[i] === receiver_bases[i]) matched.push(i);
                     }
                     if (matched.length === 0) {
@@ -1036,9 +1038,9 @@
                         return;
                     }
                     // choose sample indices
-                    const s = Math.min(state.sampleSize || 32, Math.floor(matched.length/2));
-                    const shuffled = matched.sort(()=>0.5-Math.random());
-                    const sample = shuffled.slice(0,s);
+                    const s = Math.min(state.sampleSize || 32, Math.floor(matched.length / 2));
+                    const shuffled = matched.sort(() => 0.5 - Math.random());
+                    const sample = shuffled.slice(0, s);
                     // build sample reveal object
                     const sample_pairs = sample.map(i => ({ i, initiator_bit: state.bits[i], receiver_bit: state.received_measured[i] }));
                     // send sample to receiver
@@ -1063,8 +1065,8 @@
                     // send result back to initiator
                     socket.emit('bb84_result', { from: username, to: other, e_rate, passed });
                     // also show local banner
-                    if (!passed) showBanner(`Possible eavesdrop detected (error rate ${(e_rate*100).toFixed(1)}%)`, 'danger');
-                    else showBanner(`BB84 check passed (error rate ${(e_rate*100).toFixed(1)}%)`, 'success');
+                    if (!passed) showBanner(`Possible eavesdrop detected (error rate ${(e_rate * 100).toFixed(1)}%)`, 'danger');
+                    else showBanner(`BB84 check passed (error rate ${(e_rate * 100).toFixed(1)}%)`, 'success');
                 } catch (e) { console.error(e); }
             });
 
@@ -1073,8 +1075,8 @@
                 try {
                     const e_rate = payload.e_rate;
                     const passed = payload.passed;
-                    if (!passed) showBanner(`Possible eavesdrop detected (error rate ${(e_rate*100).toFixed(1)}%)`, 'danger');
-                    else showBanner(`BB84 check passed (error rate ${(e_rate*100).toFixed(1)}%)`, 'success');
+                    if (!passed) showBanner(`Possible eavesdrop detected (error rate ${(e_rate * 100).toFixed(1)}%)`, 'danger');
+                    else showBanner(`BB84 check passed (error rate ${(e_rate * 100).toFixed(1)}%)`, 'success');
                 } catch (e) { console.error(e); }
             });
 
@@ -1097,24 +1099,24 @@
                 showBanner(`Eavesdrop unregistered for ${pair} by ${payload.by}`, 'info');
             });
 
-            function showBanner(msg, type='info'){
+            function showBanner(msg, type = 'info') {
                 // simple top banner using connection-status element
                 const status = byId('connection-status');
                 status.textContent = msg;
                 status.classList.remove('hidden');
-                status.classList.toggle('connected', type==='success');
+                status.classList.toggle('connected', type === 'success');
                 // red for danger
-                if (type==='danger') status.style.background = 'rgba(239,68,68,0.12)';
-                if (type==='warning') status.style.background = 'rgba(250,204,21,0.08)';
-                setTimeout(()=>{ status.classList.add('hidden'); status.style.background=''; }, 12000);
+                if (type === 'danger') status.style.background = 'rgba(239,68,68,0.12)';
+                if (type === 'warning') status.style.background = 'rgba(250,204,21,0.08)';
+                setTimeout(() => { status.classList.add('hidden'); status.style.background = ''; }, 12000);
             }
 
-            function promptEavesdrop(){
+            function promptEavesdrop() {
                 const pair = prompt('Enter two usernames to eavesdrop on (comma separated), e.g. alice,bob');
                 if (!pair) return;
-                const parts = pair.split(',').map(s=>s.trim());
+                const parts = pair.split(',').map(s => s.trim());
                 if (parts.length !== 2) return alert('Please enter two usernames separated by comma');
-                const [u1,u2] = parts;
+                const [u1, u2] = parts;
                 socket.emit('register_eavesdrop', { user1: u1, user2: u2, by: username });
                 alert(`Requested eavesdrop registration for ${u1} & ${u2} (you=${username})`);
             }
@@ -1163,7 +1165,8 @@
             <div id="login-box" class="auth-box">
                 <h2>Welcome Back</h2>
                 <input id="login-username" type="text" placeholder="Username" autocomplete="username" required>
-                <input id="login-password" type="password" placeholder="Password" autocomplete="current-password" required>
+                <input id="login-password" type="password" placeholder="Password" autocomplete="current-password"
+                    required>
                 <button type="button" onclick="login()">Sign In</button>
                 <p class="auth-toggle">Don't have an account?
                     <a role="button" tabindex="0" onclick="toggleAuth('register')">Sign Up</a>
@@ -1174,7 +1177,8 @@
             <div id="register-box" class="auth-box hidden">
                 <h2>Create Account</h2>
                 <input id="register-username" type="text" placeholder="Username" autocomplete="username" required>
-                <input id="register-password" type="password" placeholder="Password" autocomplete="new-password" required>
+                <input id="register-password" type="password" placeholder="Password" autocomplete="new-password"
+                    required>
                 <button type="button" onclick="register()">Sign Up</button>
                 <p class="auth-toggle">Already have an account?
                     <a role="button" tabindex="0" onclick="toggleAuth('login')">Sign In</a>
@@ -1189,7 +1193,8 @@
                 <h3 id="current-user-header">Online Users <span id="user-count">(0)</span></h3>
                 <div id="connection-status" class="connection-status hidden">Disconnected</div>
                 <ul id="userList"></ul>
-                <button id="logout-btn" type="button" onclick="handleLogout()" style="margin: 12px; padding: 10px; background: #ef4444; color: #fff; border: none; border-radius: 8px; cursor: pointer;">Logout</button>
+                <button id="logout-btn" type="button" onclick="handleLogout()"
+                    style="margin: 12px; padding: 10px; background: #ef4444; color: #fff; border: none; border-radius: 8px; cursor: pointer;">Logout</button>
             </div>
             <div id="chat-window">
                 <div id="chat-header">

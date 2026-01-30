@@ -5,9 +5,9 @@ const socket = io({
     reconnectionDelayMax: 5000,
     reconnectionAttempts: 5,
     timeout: 20000,
-    transports: ['websocket', 'polling'],
-    upgrade: true,
-    rememberUpgrade: true
+    transports: ['polling'], // Force polling for Vercel compatibility
+    upgrade: false,          // Disable upgrade to websocket
+    rememberUpgrade: false
 });
 let username = null;
 let currentRecipient = null;
@@ -107,7 +107,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     const info = document.createElement('div');
                     info.className = 'user-info';
                     const nm = document.createElement('div'); nm.className = 'user-name'; nm.textContent = name;
-                    const lastRow = document.createElement('div'); lastRow.style.display = 'flex'; lastRow.style.alignItems = 'center'; lastRow.style.gap='8px';
+                    const lastRow = document.createElement('div'); lastRow.style.display = 'flex'; lastRow.style.alignItems = 'center'; lastRow.style.gap = '8px';
                     const lastMsg = document.createElement('div'); lastMsg.className = 'user-last-message'; lastMsg.textContent = 'Tap to start chatting';
                     const meta = document.createElement('div'); meta.className = 'user-last-meta'; meta.textContent = '';
                     lastRow.appendChild(lastMsg); lastRow.appendChild(meta);
@@ -127,7 +127,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Keep a single picker element
         let pickerEl = null;
-        const EMOJIS = ['👍','❤️','😂','😮','😢','🎉','🔥','👏','🙏','😅','🤔','😍','😎','🤩','🤝','🎯','🙌','😴','🫡','💯','✨','🙂','😊','😜','😇','🤗','😬','😳','🤖','👋','🙏','🥳','🤝'];
+        const EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🎉', '🔥', '👏', '🙏', '😅', '🤔', '😍', '😎', '🤩', '🤝', '🎯', '🙌', '😴', '🫡', '💯', '✨', '🙂', '😊', '😜', '😇', '🤗', '😬', '😳', '🤖', '👋', '🙏', '🥳', '🤝'];
 
         function createPicker() {
             pickerEl = document.createElement('div');
@@ -186,7 +186,7 @@ function showNotification(message) {
     byId('notificationText').textContent = message;
     notif.classList.add('show');
     setTimeout(() => notif.classList.remove('show'), 3000);
-    
+
     if (Notification.permission === 'granted') {
         new Notification('BB84 Chat', { body: message });
     }
@@ -210,7 +210,7 @@ function formatDate(date) {
     const today = new Date();
     const yesterday = new Date(today);
     yesterday.setDate(yesterday.getDate() - 1);
-    
+
     if (d.toDateString() === today.toDateString()) {
         return 'Today';
     } else if (d.toDateString() === yesterday.toDateString()) {
@@ -234,12 +234,12 @@ async function performAuth(endpoint, user, pass, errorEl) {
         errorEl.style.display = 'block';
         return;
     }
-    
+
     // Check if socket is connected
     if (!socket.connected) {
         errorEl.textContent = 'Connecting to server...';
         errorEl.style.display = 'block';
-        
+
         // Wait for connection with timeout
         let connectionTimeout;
         const waitForConnection = new Promise((resolve, reject) => {
@@ -247,31 +247,31 @@ async function performAuth(endpoint, user, pass, errorEl) {
                 resolve();
                 return;
             }
-            
+
             const onConnect = () => {
                 socket.off('connect', onConnect);
                 socket.off('connect_error', onError);
                 clearTimeout(connectionTimeout);
                 resolve();
             };
-            
+
             const onError = (error) => {
                 socket.off('connect', onConnect);
                 socket.off('connect_error', onError);
                 clearTimeout(connectionTimeout);
                 reject(error);
             };
-            
+
             socket.on('connect', onConnect);
             socket.on('connect_error', onError);
-            
+
             connectionTimeout = setTimeout(() => {
                 socket.off('connect', onConnect);
                 socket.off('connect_error', onError);
                 reject(new Error('Connection timeout'));
             }, 5000);
         });
-        
+
         try {
             await waitForConnection;
             errorEl.style.display = 'none';
@@ -281,20 +281,20 @@ async function performAuth(endpoint, user, pass, errorEl) {
             return;
         }
     }
-    
+
     try {
         const response = await fetch(endpoint, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ username: user, password: pass })
         });
-        
+
         if (!response.ok) {
             throw new Error(`HTTP error! status: ${response.status}`);
         }
-        
+
         const data = await response.json();
-        
+
         if (data.success) {
             startChatSession(user);
             requestNotificationPermission();
@@ -314,17 +314,17 @@ async function performAuth(endpoint, user, pass, errorEl) {
 }
 
 function login() {
-    performAuth('/login', 
-        byId('login-username').value.trim(), 
-        byId('login-password').value.trim(), 
+    performAuth('/login',
+        byId('login-username').value.trim(),
+        byId('login-password').value.trim(),
         byId('login-error')
     );
 }
 
 function register() {
-    performAuth('/register', 
-        byId('register-username').value.trim(), 
-        byId('register-password').value.trim(), 
+    performAuth('/register',
+        byId('register-username').value.trim(),
+        byId('register-password').value.trim(),
         byId('register-error')
     );
 }
@@ -340,22 +340,22 @@ function startChatSession(user) {
 
 function logout() {
     if (!confirm('Are you sure you want to logout?')) return;
-    
+
     // Update status to offline
     if (username) {
         socket.emit("update_status", { username, status: "offline" });
     }
-    
+
     // Disconnect socket
     socket.disconnect();
-    
+
     // Clear session data
     username = null;
     currentRecipient = null;
     allUsers = [];
     allGroups = [];
     replyToMessage = null;
-    
+
     // Stop any ongoing calls
     if (localStream) {
         localStream.getTracks().forEach(track => track.stop());
@@ -365,21 +365,21 @@ function logout() {
         peerConnection.close();
         peerConnection = null;
     }
-    
+
     // Clear UI
     byId('userList').innerHTML = '';
     byId('messages').innerHTML = '';
     byId('messageInput').value = '';
-    
+
     // Show auth screen
     byId('chat-screen').style.display = 'none';
     byId('auth-screen').style.display = 'flex';
-    
+
     // Reconnect socket for next login
     setTimeout(() => {
         socket.connect();
     }, 500);
-    
+
     showNotification('Logged out successfully');
 }
 
@@ -416,19 +416,19 @@ function updateUserList(users) {
         const li = document.createElement("li");
         li.dataset.username = group.name;
         li.dataset.isGroup = "true";
-        
+
         const avatar = document.createElement("div");
         avatar.className = "user-avatar";
         avatar.style.background = "var(--accent-gradient)";
         avatar.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>`;
-        
+
         const info = document.createElement("div");
         info.className = "user-info";
-        
+
         const name = document.createElement("div");
         name.className = "user-name";
         name.textContent = group.name;
-        
+
         const lastRow = document.createElement('div');
         lastRow.style.display = 'flex';
         lastRow.style.alignItems = 'center';
@@ -454,10 +454,10 @@ function updateUserList(users) {
 
         info.appendChild(name);
         info.appendChild(lastRow);
-        
+
         li.appendChild(avatar);
         li.appendChild(info);
-        
+
         if (group.name === currentRecipient) li.classList.add('active');
 
         li.onclick = () => selectGroup(group.name, li);
@@ -470,10 +470,10 @@ function updateUserList(users) {
 
         const li = document.createElement("li");
         li.dataset.username = u;
-        
+
         const avatar = document.createElement("div");
         avatar.className = "user-avatar";
-        
+
         // Check if user has avatar
         const userAvatarUrl = window.userData?.[u]?.avatar_url;
         if (userAvatarUrl) {
@@ -483,18 +483,18 @@ function updateUserList(users) {
         } else {
             avatar.innerHTML = getInitials(u);
         }
-        
+
         const badge = document.createElement("div");
         badge.className = "user-status-badge " + getUserStatusClass(userStatuses[u] || 'online');
         avatar.appendChild(badge);
-        
+
         const info = document.createElement("div");
         info.className = "user-info";
-        
+
         const name = document.createElement("div");
         name.className = "user-name";
         name.textContent = u;
-        
+
         const lastRow = document.createElement('div');
         lastRow.style.display = 'flex';
         lastRow.style.alignItems = 'center';
@@ -527,10 +527,10 @@ function updateUserList(users) {
         unread.style.display = 'none';
         unread.dataset.username = u;
         info.appendChild(unread);
-        
+
         li.appendChild(avatar);
         li.appendChild(info);
-        
+
         if (u === currentRecipient) li.classList.add('active');
 
         li.onclick = () => { selectUser(u, li); clearUnread(u); };
@@ -557,7 +557,7 @@ function hideSidebarOnMobile() {
 
 function selectUser(user, element) {
     if (currentRecipient === user) return;
-    
+
     currentRecipient = user;
     document.querySelectorAll('#userList li').forEach(item => item.classList.remove('active'));
     element.classList.add('active');
@@ -584,7 +584,7 @@ function selectUser(user, element) {
 
 function selectGroup(groupName, element) {
     if (currentRecipient === groupName) return;
-    
+
     currentRecipient = groupName;
     document.querySelectorAll('#userList li').forEach(item => item.classList.remove('active'));
     element.classList.add('active');
@@ -596,7 +596,7 @@ function selectGroup(groupName, element) {
     hideSidebarOnMobile();
 
     socket.emit("get_group_history", { group_name: groupName, username: username });
-    
+
     // Add group settings button
     addGroupSettingsButtonToHeader();
 }
@@ -609,14 +609,14 @@ function appendMessage(sender, message, data = {}) {
     const msgContainer = byId('messages');
     const welcome = byId('welcome');
     if (welcome) welcome.remove();
-    
+
     // Track whether user is at the bottom before adding
     const wasAtBottom = isMessagesAtBottom();
 
     // Add date separator if needed
     const msgDate = data.timestamp ? new Date(data.timestamp) : new Date();
     const dateStr = formatDate(msgDate);
-    
+
     if (dateStr !== lastMessageDate) {
         const separator = document.createElement("div");
         separator.className = "date-separator";
@@ -625,21 +625,21 @@ function appendMessage(sender, message, data = {}) {
         lastMessageDate = dateStr;
         lastMessageSender = null;
     }
-    
+
     // Check if this is part of a cluster
     const isCluster = lastMessageSender === sender;
-    
+
     const msgDiv = document.createElement("div");
     msgDiv.classList.add("message");
     msgDiv.classList.add(sender === username ? "sent" : "received");
     msgDiv.dataset.messageId = data.id || Date.now();
     const msgId = msgDiv.dataset.messageId;
-    
+
     if (!isCluster) {
         msgDiv.classList.add("first");
     }
     msgDiv.classList.add("last");
-    
+
     // Update previous message to not be last if it's in a cluster
     if (isCluster) {
         const messages = msgContainer.querySelectorAll('.message');
@@ -648,7 +648,7 @@ function appendMessage(sender, message, data = {}) {
             prevMsg.classList.remove('last');
         }
     }
-    
+
     // Avatar (show for received messages only, and not for clusters)
     if (!isCluster && sender !== username) {
         const avatar = document.createElement("div");
@@ -664,13 +664,13 @@ function appendMessage(sender, message, data = {}) {
         }
         msgDiv.appendChild(avatar);
     }
-    
+
     const content = document.createElement("div");
     content.className = "message-content";
-    
+
     const bubble = document.createElement("div");
     bubble.className = "message-bubble";
-    
+
     // Sender name (only for first in cluster and only for groups)
     if (!isCluster && sender !== username && (data.group_id || (currentRecipient && String(currentRecipient).startsWith('group_')))) {
         const senderName = document.createElement("div");
@@ -679,10 +679,10 @@ function appendMessage(sender, message, data = {}) {
         senderName.onclick = () => showUserProfile(sender);
         bubble.appendChild(senderName);
     }
-    
+
     // Message content
     const msgContent = document.createElement("div");
-    
+
     if (data.message_type === 'image' && data.file_url) {
         const img = document.createElement("img");
         img.src = data.file_url;
@@ -772,9 +772,9 @@ function appendMessage(sender, message, data = {}) {
         // Insert reply block at top of bubble
         bubble.insertBefore(replyBlock, bubble.firstChild);
     }
-    
+
     bubble.appendChild(msgContent);
-    
+
     // Meta info
     // message-meta intentionally omitted (timestamp removed for now)
     const meta = document.createElement("div");
@@ -784,7 +784,7 @@ function appendMessage(sender, message, data = {}) {
         meta.textContent = 'edited';
         bubble.appendChild(meta);
     }
-    
+
     // Reactions
     if (data.reactions && data.reactions.length > 0) {
         const reactionsDiv = document.createElement("div");
@@ -793,12 +793,12 @@ function appendMessage(sender, message, data = {}) {
         renderReactions(reactionsDiv, data.reactions);
         bubble.appendChild(reactionsDiv);
     }
-    
+
     content.appendChild(bubble);
     msgDiv.appendChild(content);
     msgContainer.appendChild(msgDiv);
     // attach interactions
-    try { attachMessageInteraction(msgDiv, msgDiv.dataset.messageId, sender); } catch(e){}
+    try { attachMessageInteraction(msgDiv, msgDiv.dataset.messageId, sender); } catch (e) { }
     // update last-message preview
     updateLastMessagePreview(sender, message, data.timestamp);
     lastMessageSender = sender;
@@ -814,7 +814,7 @@ function appendMessage(sender, message, data = {}) {
     try {
         bubble.classList.add('arrival');
         setTimeout(() => bubble.classList.remove('arrival'), 700);
-    } catch (e) {}
+    } catch (e) { }
 }
 
 // Unread badge helpers
@@ -847,7 +847,7 @@ function updateLastMessagePreview(usernameKey, text, timestamp) {
     if (item) {
         const lastMsg = item.querySelector('.user-last-message');
         const meta = item.querySelector('.user-last-meta');
-        if (lastMsg) lastMsg.textContent = text ? (text.length > 40 ? text.substring(0,40)+'…' : text) : '';
+        if (lastMsg) lastMsg.textContent = text ? (text.length > 40 ? text.substring(0, 40) + '…' : text) : '';
         if (meta) meta.textContent = timestamp ? formatTime(timestamp) : '';
         // bump item to top (optional) -- commented out
         // item.parentNode.prepend(item);
@@ -906,7 +906,7 @@ function hideNewMessagesIndicator() {
 function renderReactions(container, reactions) {
     container.innerHTML = '';
     const reactionCounts = {};
-    
+
     reactions.forEach(r => {
         if (!reactionCounts[r.emoji]) {
             reactionCounts[r.emoji] = { count: 0, users: [] };
@@ -914,7 +914,7 @@ function renderReactions(container, reactions) {
         reactionCounts[r.emoji].count++;
         reactionCounts[r.emoji].users.push(r.user);
     });
-    
+
     Object.entries(reactionCounts).forEach(([emoji, data]) => {
         const reactionItem = document.createElement("span");
         reactionItem.className = "reaction-item";
@@ -927,22 +927,22 @@ function renderReactions(container, reactions) {
 
 function showTypingIndicator(sender, conversationId) {
     if (!conversationId) conversationId = sender;
-    
+
     // Initialize set for this conversation if needed
     if (!typingUsers[conversationId]) {
         typingUsers[conversationId] = new Set();
     }
-    
+
     // Add sender to typing users
     typingUsers[conversationId].add(sender);
-    
+
     // Only show if viewing this conversation
-    const isCurrentConversation = 
-        (conversationId === currentRecipient) || 
+    const isCurrentConversation =
+        (conversationId === currentRecipient) ||
         (conversationId.startsWith('group_') && currentRecipient && currentRecipient.startsWith('group_'));
-    
+
     if (!isCurrentConversation) return;
-    
+
     // show header small typing status
     const headerStatus = byId('chat-partner-status');
     if (headerStatus && conversationId === currentRecipient) {
@@ -957,15 +957,15 @@ function showTypingIndicator(sender, conversationId) {
 
 function hideTypingIndicator(sender, conversationId) {
     if (!conversationId) conversationId = sender;
-    
+
     if (typingUsers[conversationId]) {
         typingUsers[conversationId].delete(sender);
-        
+
         if (typingUsers[conversationId].size === 0) {
             delete typingUsers[conversationId];
         }
     }
-    
+
     updateTypingIndicatorDisplay(conversationId);
     const headerStatus = byId('chat-partner-status');
     if (headerStatus && conversationId === currentRecipient) {
@@ -978,15 +978,15 @@ function hideTypingIndicator(sender, conversationId) {
 
 function updateTypingIndicatorDisplay(conversationId) {
     const existing = document.querySelector('.typing-indicator');
-    
+
     if (!typingUsers[conversationId] || typingUsers[conversationId].size === 0) {
         if (existing) existing.remove();
         return;
     }
-    
+
     const typingArray = Array.from(typingUsers[conversationId]);
     let text = '';
-    
+
     if (typingArray.length === 1) {
         text = `${typingArray[0]} is typing`;
     } else if (typingArray.length === 2) {
@@ -996,7 +996,7 @@ function updateTypingIndicatorDisplay(conversationId) {
     } else {
         text = `${typingArray[0]}, ${typingArray[1]}, and ${typingArray.length - 2} others are typing`;
     }
-    
+
     if (existing) {
         existing.querySelector('span').textContent = text;
     } else {
@@ -1036,27 +1036,27 @@ async function startRecording() {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
         mediaRecorder = new MediaRecorder(stream);
         audioChunks = [];
-        
+
         mediaRecorder.ondataavailable = (event) => {
             audioChunks.push(event.data);
         };
-        
+
         mediaRecorder.onstop = async () => {
             const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
             await uploadVoiceMessage(audioBlob);
-            
+
             // Stop all tracks
             stream.getTracks().forEach(track => track.stop());
         };
-        
+
         mediaRecorder.start();
         recordingStartTime = Date.now();
-        
+
         // Show recording indicator
         byId('recordingIndicator').classList.add('active');
         byId('micBtn').style.background = 'var(--error)';
         byId('micBtn').style.color = 'white';
-        
+
         // Update timer
         recordingTimer = setInterval(() => {
             const elapsed = Math.floor((Date.now() - recordingStartTime) / 1000);
@@ -1064,7 +1064,7 @@ async function startRecording() {
             const seconds = elapsed % 60;
             byId('recordingTime').textContent = `${minutes}:${seconds.toString().padStart(2, '0')}`;
         }, 1000);
-        
+
         showNotification('Recording started...');
     } catch (error) {
         console.error('Error accessing microphone:', error);
@@ -1076,12 +1076,12 @@ function stopRecording() {
     if (mediaRecorder && mediaRecorder.state === 'recording') {
         mediaRecorder.stop();
         clearInterval(recordingTimer);
-        
+
         // Hide recording indicator
         byId('recordingIndicator').classList.remove('active');
         byId('micBtn').style.background = '';
         byId('micBtn').style.color = '';
-        
+
         showNotification('Recording saved!');
     }
 }
@@ -1090,14 +1090,14 @@ async function uploadVoiceMessage(blob) {
     const formData = new FormData();
     const filename = `voice_${Date.now()}.webm`;
     formData.append('file', blob, filename);
-    
+
     try {
         const response = await fetch('/upload_file', {
             method: 'POST',
             body: formData
         });
         const data = await response.json();
-        
+
         if (data.success) {
             sendFileMessage(data.file_url, filename, 'voice');
         } else {
@@ -1112,17 +1112,17 @@ async function uploadVoiceMessage(blob) {
 async function handleFileUpload(event) {
     const file = event.target.files[0];
     if (!file) return;
-    
+
     const formData = new FormData();
     formData.append('file', file);
-    
+
     try {
         const response = await fetch('/upload_file', {
             method: 'POST',
             body: formData
         });
         const data = await response.json();
-        
+
         if (data.success) {
             sendFileMessage(data.file_url, data.file_name, data.file_type);
         } else {
@@ -1131,15 +1131,15 @@ async function handleFileUpload(event) {
     } catch (error) {
         showNotification('File upload error');
     }
-    
+
     event.target.value = '';
 }
 
 function sendFileMessage(fileUrl, fileName, fileType) {
     if (!currentRecipient) return;
-    
+
     const isGroup = allGroups.some(g => g.name === currentRecipient);
-    
+
     if (isGroup) {
         socket.emit("send_group_message", {
             sender: username,
@@ -1165,21 +1165,21 @@ function sendFileMessage(fileUrl, fileName, fileType) {
 function sendMessage() {
     const input = byId('messageInput');
     const text = input.value.trim();
-    
+
     if (text && currentRecipient) {
         const isGroup = allGroups.some(g => g.name === currentRecipient);
-        
+
         const messageData = {
             sender: username,
             message: text,
             message_type: 'text'
         };
-        
+
         if (replyToMessage) {
             // send numeric id to server for DB lookup
             messageData.reply_to_id = Number(replyToMessage.id);
         }
-        
+
         if (isGroup) {
             messageData.group_name = currentRecipient;
             socket.emit("send_group_message", messageData);
@@ -1188,11 +1188,11 @@ function sendMessage() {
             console.log('sendMessage emitting send_message', messageData);
             socket.emit("send_message", messageData);
         }
-        
+
         input.value = "";
         input.style.height = 'auto';
         cancelReply();
-        
+
         // Send stop typing with group_id if in group chat
         const stopTypingData = { sender: username };
         if (isGroup) {
@@ -1213,13 +1213,13 @@ function handleKey(event) {
 
 function handleTyping() {
     const input = byId('messageInput');
-    
+
     // Auto-resize
     input.style.height = 'auto';
     input.style.height = Math.min(input.scrollHeight, 120) + 'px';
-    
+
     if (!currentRecipient) return;
-    
+
     // Send typing with group_id if in group chat
     const isGroup = currentRecipient && currentRecipient.startsWith('group_');
     const typingData = { sender: username };
@@ -1229,9 +1229,9 @@ function handleTyping() {
         typingData.recipient = currentRecipient;
     }
     socket.emit("typing", typingData);
-    
+
     if (typingTimeout) clearTimeout(typingTimeout);
-    
+
     typingTimeout = setTimeout(() => {
         const stopTypingData = { sender: username };
         const isGroupCheck = currentRecipient && currentRecipient.startsWith('group_');
@@ -1257,7 +1257,7 @@ function toggleReaction(messageId, emoji) {
 function openGroupModal() {
     const modal = byId('groupModal');
     const membersList = byId('membersList');
-    
+
     membersList.innerHTML = '';
     allUsers.forEach(user => {
         const label = document.createElement('label');
@@ -1270,7 +1270,7 @@ function openGroupModal() {
         `;
         membersList.appendChild(label);
     });
-    
+
     modal.style.display = 'flex';
 }
 
@@ -1283,23 +1283,23 @@ function createGroup() {
     const groupName = byId('groupName').value.trim();
     const checkboxes = document.querySelectorAll('.group-member-checkbox:checked');
     const members = Array.from(checkboxes).map(cb => cb.value);
-    
+
     if (!groupName) {
         showNotification('Please enter a group name');
         return;
     }
-    
+
     if (members.length === 0) {
         showNotification('Please select at least one member');
         return;
     }
-    
+
     socket.emit("create_group", {
         creator: username,
         name: groupName,
         members: [...members, username]
     });
-    
+
     closeGroupModal();
     showNotification('Creating group...');
 }
@@ -1315,7 +1315,7 @@ function closeSearchModal() {
     byId('searchModal').style.display = 'none';
 }
 
-byId('searchQuery').addEventListener('input', function() {
+byId('searchQuery').addEventListener('input', function () {
     const query = this.value.trim();
     if (query.length >= 2 && currentRecipient) {
         socket.emit("search_messages", {
@@ -1341,20 +1341,20 @@ function saveSettings() {
     const statusMessage = byId('statusMessage').value;
     const showLastSeen = byId('showLastSeen').checked;
     const showReadReceipts = byId('showReadReceipts').checked;
-    
+
     socket.emit("update_status", {
         username,
         status,
         status_message: statusMessage
     });
-    
+
     socket.emit("update_privacy_settings", {
         username,
         show_last_seen: showLastSeen,
         show_read_receipts: showReadReceipts,
         allow_messages_from: 'everyone'
     });
-    
+
     closeSettingsModal();
     showNotification('Settings saved!');
 }
@@ -1374,7 +1374,7 @@ socket.on("connect", () => {
     const registerError = byId('register-error');
     if (loginError) loginError.style.display = 'none';
     if (registerError) registerError.style.display = 'none';
-    
+
     if (username) {
         socket.emit("register_user", username);
         socket.emit("update_status", { username, status: "online" });
@@ -1459,7 +1459,7 @@ socket.on("receive_message", data => {
 
     if (data.sender === currentRecipient || (data.sender === username && partner === currentRecipient)) {
         appendMessage(data.sender, data.message, data);
-        
+
         if (data.sender === currentRecipient) {
             socket.emit("message_delivered", { id: data.id });
         }
@@ -1482,7 +1482,7 @@ socket.on("user_stopped_typing", data => {
 
 socket.on("user_status_changed", data => {
     userStatuses[data.username] = data.status;
-    
+
     // Update UI
     const userItem = document.querySelector(`[data-username="${data.username}"]`);
     if (userItem) {
@@ -1491,7 +1491,7 @@ socket.on("user_status_changed", data => {
             badge.className = 'user-status-badge ' + getUserStatusClass(data.status);
         }
     }
-    
+
     if (data.username === currentRecipient) {
         updateRecipientStatus(data);
     }
@@ -1505,24 +1505,24 @@ socket.on("user_status_info", data => {
 
 function updateRecipientStatus(data) {
     const statusText = byId('chat-partner-status');
-    
+
     let statusStr = data.status.charAt(0).toUpperCase() + data.status.slice(1);
     if (data.status_message) {
         statusStr = data.status_message;
     }
-    
+
     statusText.innerHTML = `<span class="status-dot ${getUserStatusClass(data.status)}"></span><span>${statusStr}</span>`;
 }
 
 socket.on("search_results", data => {
     const resultsDiv = byId('searchResults');
     resultsDiv.innerHTML = '';
-    
+
     if (data.results.length === 0) {
         resultsDiv.innerHTML = '<p style="text-align: center; color: var(--text-tertiary); padding: 20px;">No results found</p>';
         return;
     }
-    
+
     data.results.forEach(result => {
         const resultDiv = document.createElement("div");
         resultDiv.style.padding = "12px";
@@ -1573,7 +1573,7 @@ socket.on("group_message", data => {
 
 
 // Close modals when clicking outside
-window.onclick = function(event) {
+window.onclick = function (event) {
     if (event.target.classList.contains('modal')) {
         event.target.style.display = 'none';
     }
@@ -1596,7 +1596,7 @@ window.addEventListener('DOMContentLoaded', async () => {
 function showMessageOptions(messageId, sender) {
     const existingMenu = document.querySelector('.message-options-menu');
     if (existingMenu) existingMenu.remove();
-    
+
     const menu = document.createElement('div');
     menu.className = 'message-options-menu';
     menu.innerHTML = `
@@ -1642,9 +1642,9 @@ function showMessageOptions(messageId, sender) {
     `;
     document.body.appendChild(menu);
     // Default center position; if caller supplied coordinates, they will be applied by caller.
-    menu.style.left = (window.innerWidth/2 - menu.offsetWidth/2) + 'px';
-    menu.style.top = (window.innerHeight/2 - menu.offsetHeight/2) + 'px';
-    
+    menu.style.left = (window.innerWidth / 2 - menu.offsetWidth / 2) + 'px';
+    menu.style.top = (window.innerHeight / 2 - menu.offsetHeight / 2) + 'px';
+
     setTimeout(() => {
         document.addEventListener('click', function closeMenu(e) {
             if (!menu.contains(e.target)) {
@@ -1658,23 +1658,23 @@ function showMessageOptions(messageId, sender) {
 function editMessage(messageId) {
     const messageDiv = document.querySelector(`[data-message-id="${messageId}"]`);
     if (!messageDiv) return;
-    
+
     const messageText = messageDiv.querySelector('.message-text');
     if (!messageText) return;
-    
+
     const originalText = messageText.textContent;
     const input = document.createElement('textarea');
     input.value = originalText;
     input.className = 'message-edit-input';
     input.style.cssText = 'width: 100%; padding: 8px; border: 1px solid var(--accent-primary); border-radius: 4px; background: var(--bg-secondary); color: var(--text-primary); font-family: inherit; resize: vertical;';
-    
+
     const btnContainer = document.createElement('div');
     btnContainer.style.cssText = 'display: flex; gap: 8px; margin-top: 8px;';
     btnContainer.innerHTML = `
         <button class="btn-primary" style="padding: 4px 12px; font-size: 12px;" onclick="saveEditedMessage(${messageId}, this)">Save</button>
         <button class="btn-secondary" style="padding: 4px 12px; font-size: 12px;" onclick="cancelEdit(${messageId}, '${originalText.replace(/'/g, "\\'")}')">Cancel</button>
     `;
-    
+
     messageText.replaceWith(input);
     input.parentNode.appendChild(btnContainer);
     input.focus();
@@ -1684,19 +1684,19 @@ function saveEditedMessage(messageId, button) {
     const messageDiv = document.querySelector(`[data-message-id="${messageId}"]`);
     const input = messageDiv.querySelector('.message-edit-input');
     const newText = input.value.trim();
-    
+
     if (!newText) return;
-    
+
     socket.emit('edit_message', {
         message_id: messageId,
         new_text: newText,
         editor: username
     });
-    
+
     const messageText = document.createElement('p');
     messageText.className = 'message-text';
     messageText.textContent = newText;
-    
+
     input.replaceWith(messageText);
     button.parentNode.remove();
 }
@@ -1704,11 +1704,11 @@ function saveEditedMessage(messageId, button) {
 function cancelEdit(messageId, originalText) {
     const messageDiv = document.querySelector(`[data-message-id="${messageId}"]`);
     const input = messageDiv.querySelector('.message-edit-input');
-    
+
     const messageText = document.createElement('p');
     messageText.className = 'message-text';
     messageText.textContent = originalText;
-    
+
     input.replaceWith(messageText);
     const btnContainer = messageDiv.querySelector('div[style*="display: flex"]');
     if (btnContainer) btnContainer.remove();
@@ -1727,19 +1727,19 @@ function deleteMessage(messageId, deleteForEveryone) {
 function replyToMessageFunc(messageId) {
     const messageDiv = document.querySelector(`[data-message-id="${messageId}"]`);
     if (!messageDiv) return;
-    
+
     const messageText = messageDiv.querySelector('.message-text')?.textContent || 'File';
-    const sender = messageDiv.querySelector('.sender-name')?.textContent || 
-                   (messageDiv.classList.contains('sent') ? username : currentRecipient);
-    
+    const sender = messageDiv.querySelector('.sender-name')?.textContent ||
+        (messageDiv.classList.contains('sent') ? username : currentRecipient);
+
     replyToMessage = { id: String(messageId), text: messageText, sender: sender };
     console.log('replyToMessage set', replyToMessage);
-    
+
     const replyPreview = document.getElementById('replyPreview') || createReplyPreview();
     replyPreview.querySelector('.reply-text').textContent = messageText;
     replyPreview.querySelector('.reply-sender').textContent = sender;
     replyPreview.style.display = 'flex';
-    
+
     byId('messageInput').focus();
 }
 
@@ -1765,11 +1765,11 @@ function cancelReply() {
 }
 
 function addReactionToMessage(messageId) {
-    const reactions = ['👍','❤️','😂','😮','😢','🎉','🔥','👏','🙏','😅','🤔','😍','😎','🤩','🤝','🎯','🙌','😴','🫡','💯','✨'];
+    const reactions = ['👍', '❤️', '😂', '😮', '😢', '🎉', '🔥', '👏', '🙏', '😅', '🤔', '😍', '😎', '🤩', '🤝', '🎯', '🙌', '😴', '🫡', '💯', '✨'];
     const menu = document.createElement('div');
     menu.className = 'reaction-picker';
     menu.style.cssText = 'position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: var(--bg-secondary); padding: 12px; border-radius: 12px; box-shadow: var(--shadow-md); display: flex; gap: 8px; z-index: 10000;';
-    
+
     reactions.forEach(emoji => {
         const btn = document.createElement('button');
         btn.textContent = emoji;
@@ -1786,7 +1786,7 @@ function addReactionToMessage(messageId) {
         };
         menu.appendChild(btn);
     });
-    
+
     document.body.appendChild(menu);
     setTimeout(() => {
         document.addEventListener('click', function closePicker(e) {
@@ -1803,14 +1803,14 @@ async function uploadProfilePicture(file) {
     const formData = new FormData();
     formData.append('file', file);
     formData.append('username', username);
-    
+
     try {
         const response = await fetch('/upload_avatar', {
             method: 'POST',
             body: formData
         });
         const data = await response.json();
-        
+
         if (data.success) {
             showNotification('Profile picture updated!');
             // Update UI with new avatar
@@ -1834,21 +1834,21 @@ async function initiateCall(callType) {
         showNotification('Cannot call groups');
         return;
     }
-    
+
     try {
         const constraints = {
             audio: true,
             video: callType === 'video'
         };
-        
+
         localStream = await navigator.mediaDevices.getUserMedia(constraints);
-        
+
         peerConnection = new RTCPeerConnection(iceServers);
-        
+
         localStream.getTracks().forEach(track => {
             peerConnection.addTrack(track, localStream);
         });
-        
+
         peerConnection.onicecandidate = event => {
             if (event.candidate) {
                 socket.emit('ice_candidate', {
@@ -1858,24 +1858,24 @@ async function initiateCall(callType) {
                 });
             }
         };
-        
+
         peerConnection.ontrack = event => {
             const remoteVideo = document.getElementById('remoteVideo');
             if (remoteVideo) {
                 remoteVideo.srcObject = event.streams[0];
             }
         };
-        
+
         const offer = await peerConnection.createOffer();
         await peerConnection.setLocalDescription(offer);
-        
+
         socket.emit('initiate_call', {
             caller: username,
             callee: currentRecipient,
             call_type: callType,
             offer: JSON.stringify(offer)
         });
-        
+
         showCallUI(callType, 'outgoing');
     } catch (error) {
         console.error('Error initiating call:', error);
@@ -1890,16 +1890,16 @@ async function answerCall(callId, offer) {
             audio: true,
             video: currentCall.call_type === 'video'
         };
-        
+
         console.log('Getting user media with constraints:', constraints);
         localStream = await navigator.mediaDevices.getUserMedia(constraints);
-        
+
         peerConnection = new RTCPeerConnection(iceServers);
-        
+
         localStream.getTracks().forEach(track => {
             peerConnection.addTrack(track, localStream);
         });
-        
+
         peerConnection.onicecandidate = event => {
             if (event.candidate) {
                 socket.emit('ice_candidate', {
@@ -1909,14 +1909,14 @@ async function answerCall(callId, offer) {
                 });
             }
         };
-        
+
         peerConnection.ontrack = event => {
             const remoteVideo = document.getElementById('remoteVideo');
             if (remoteVideo) {
                 remoteVideo.srcObject = event.streams[0];
             }
         };
-        
+
         console.log('Setting remote description');
         await peerConnection.setRemoteDescription(JSON.parse(offer));
         // After setting remote description, drain any queued ICE candidates
@@ -1933,14 +1933,14 @@ async function answerCall(callId, offer) {
         }
         const answer = await peerConnection.createAnswer();
         await peerConnection.setLocalDescription(answer);
-        
+
         console.log('Emitting answer_call');
         socket.emit('answer_call', {
             call_id: callId,
             answer: JSON.stringify(answer),
             callee: username
         });
-        
+
         showCallUI(currentCall.call_type, 'active');
         console.log('Call answered successfully');
     } catch (error) {
@@ -1973,12 +1973,12 @@ function endCall(suppressEmit = false) {
     }
 
     if (peerConnection) {
-        try { peerConnection.close(); } catch (e) {}
+        try { peerConnection.close(); } catch (e) { }
         peerConnection = null;
     }
 
     if (localStream) {
-        try { localStream.getTracks().forEach(track => track.stop()); } catch (e) {}
+        try { localStream.getTracks().forEach(track => track.stop()); } catch (e) { }
         localStream = null;
     }
 
@@ -2007,12 +2007,12 @@ function showCallUI(callType, status) {
         `;
         document.body.appendChild(callUI);
     }
-    
+
     const localVideo = document.getElementById('localVideo');
     if (localStream && localVideo) {
         localVideo.srcObject = localStream;
     }
-    
+
     if (callType === 'voice') {
         document.getElementById('localVideo').style.display = 'none';
         document.getElementById('remoteVideo').style.display = 'none';
@@ -2249,7 +2249,7 @@ let currentGroupId = null;
 function openGroupSettingsModal(groupId) {
     currentGroupId = groupId;
     byId('groupSettingsModal').style.display = 'flex';
-    
+
     // Load group details
     const group = allGroups.find(g => `group_${g.id}` === groupId);
     if (group) {
@@ -2268,10 +2268,10 @@ function closeGroupSettingsModal() {
 function loadGroupMembers(groupId) {
     const group = allGroups.find(g => g.id === groupId);
     if (!group) return;
-    
+
     const membersList = byId('groupMembersList');
     membersList.innerHTML = '';
-    
+
     group.members.forEach(member => {
         const memberDiv = document.createElement('div');
         memberDiv.style.cssText = 'display: flex; justify-content: space-between; align-items: center; padding: 8px; border-bottom: 1px solid var(--border-color);';
@@ -2290,16 +2290,16 @@ function loadGroupAdmins(groupId) {
 socket.on('group_admins', data => {
     const adminsList = byId('groupAdminsList');
     if (!adminsList) return;
-    
+
     adminsList.innerHTML = '';
-    
+
     data.admins.forEach(admin => {
         const adminDiv = document.createElement('div');
         adminDiv.style.cssText = 'display: flex; justify-content: space-between; align-items: center; padding: 8px; border-bottom: 1px solid var(--border-color);';
-        
+
         const roleLabel = admin.role === 'creator' ? 'Creator' : 'Admin';
         const canDemote = admin.role !== 'creator';
-        
+
         adminDiv.innerHTML = `
             <div>
                 <div>${admin.username}</div>
@@ -2314,10 +2314,10 @@ socket.on('group_admins', data => {
 function populateAddMemberSelect(groupId) {
     const group = allGroups.find(g => g.id === groupId);
     if (!group) return;
-    
+
     const select = byId('addMemberSelect');
     select.innerHTML = '<option value="">Select a user...</option>';
-    
+
     allUsers.filter(u => !group.members.includes(u)).forEach(user => {
         const option = document.createElement('option');
         option.value = user;
@@ -2329,7 +2329,7 @@ function populateAddMemberSelect(groupId) {
 function updateGroupName() {
     const newName = byId('editGroupName').value.trim();
     if (!newName || !currentGroupId) return;
-    
+
     const groupId = parseInt(currentGroupId.split('_')[1]);
     socket.emit('edit_group', {
         group_id: groupId,
@@ -2341,7 +2341,7 @@ function updateGroupName() {
 function addMemberToGroup() {
     const selectedUser = byId('addMemberSelect').value;
     if (!selectedUser || !currentGroupId) return;
-    
+
     const groupId = parseInt(currentGroupId.split('_')[1]);
     socket.emit('add_group_member', {
         group_id: groupId,
@@ -2353,7 +2353,7 @@ function addMemberToGroup() {
 function removeMemberFromGroup(memberUsername) {
     if (!currentGroupId) return;
     if (!confirm(`Remove ${memberUsername} from group?`)) return;
-    
+
     const groupId = parseInt(currentGroupId.split('_')[1]);
     socket.emit('remove_group_member', {
         group_id: groupId,
@@ -2364,7 +2364,7 @@ function removeMemberFromGroup(memberUsername) {
 
 function promoteToAdmin(memberUsername) {
     if (!currentGroupId) return;
-    
+
     const groupId = parseInt(currentGroupId.split('_')[1]);
     socket.emit('promote_to_admin', {
         group_id: groupId,
@@ -2376,7 +2376,7 @@ function promoteToAdmin(memberUsername) {
 function demoteAdmin(adminUsername) {
     if (!currentGroupId) return;
     if (!confirm(`Demote ${adminUsername} from admin?`)) return;
-    
+
     const groupId = parseInt(currentGroupId.split('_')[1]);
     socket.emit('demote_admin', {
         group_id: groupId,
@@ -2388,7 +2388,7 @@ function demoteAdmin(adminUsername) {
 function createInvitation() {
     const inviteUsername = byId('inviteUsername').value.trim();
     if (!inviteUsername || !currentGroupId) return;
-    
+
     const groupId = parseInt(currentGroupId.split('_')[1]);
     socket.emit('create_group_invitation', {
         group_id: groupId,
@@ -2515,21 +2515,21 @@ function loadDevices() {
 socket.on('devices_list', data => {
     const devicesList = byId('devicesList');
     if (!devicesList) return;
-    
+
     devicesList.innerHTML = '';
-    
+
     if (data.devices.length === 0) {
         devicesList.innerHTML = '<p style="text-align: center; color: var(--text-tertiary); padding: 16px;">No linked devices</p>';
         return;
     }
-    
+
     data.devices.forEach(device => {
         const deviceDiv = document.createElement('div');
         deviceDiv.style.cssText = 'display: flex; justify-content: space-between; align-items: center; padding: 12px; border-bottom: 1px solid var(--border-color);';
-        
+
         const lastActive = new Date(device.last_active);
         const timeAgo = getTimeAgo(lastActive);
-        
+
         deviceDiv.innerHTML = `
             <div>
                 <div style="font-weight: 500;">${device.device_name || 'Unknown Device'}</div>
@@ -2554,7 +2554,7 @@ function getTimeAgo(date) {
 
 function removeDevice(deviceId) {
     if (!confirm('Remove this device?')) return;
-    
+
     socket.emit('remove_device', {
         device_id: deviceId,
         username: username
@@ -2574,10 +2574,10 @@ socket.on('qr_code_generated', data => {
     const container = byId('qrCodeContainer');
     const display = byId('qrCodeDisplay');
     const expiry = byId('qrExpiry');
-    
+
     // Clear previous QR code
     display.innerHTML = '';
-    
+
     // Generate QR code using QRCode.js
     new QRCode(display, {
         text: data.token,
@@ -2587,12 +2587,12 @@ socket.on('qr_code_generated', data => {
         colorLight: "#ffffff",
         correctLevel: QRCode.CorrectLevel.H
     });
-    
+
     container.style.display = 'block';
-    
+
     const expiresIn = data.expires_in;
     expiry.textContent = `Expires in ${Math.floor(expiresIn / 60)} minutes`;
-    
+
     // Countdown
     let remaining = expiresIn;
     const interval = setInterval(() => {
@@ -2611,7 +2611,7 @@ socket.on('qr_code_generated', data => {
 function verifyQRCode() {
     const token = byId('qrTokenInput').value.trim();
     if (!token) return;
-    
+
     socket.emit('verify_qr_code', {
         token: token,
         device_name: navigator.userAgent.includes('Mobile') ? 'Mobile Device' : 'Desktop',
@@ -2656,7 +2656,7 @@ function addGroupSettingsButtonToHeader() {
     // Remove existing button if any
     const existingBtn = document.getElementById('groupSettingsBtn');
     if (existingBtn) existingBtn.remove();
-    
+
     const chatHeader = document.querySelector('.chat-header-actions');
     if (chatHeader && currentRecipient && currentRecipient.startsWith('group_')) {
         const groupBtn = document.createElement('button');
@@ -2677,7 +2677,7 @@ function addGroupSettingsButtonToHeader() {
 
 // Update when settings modal opens
 const originalOpenSettingsModal = window.openSettingsModal;
-window.openSettingsModal = function() {
+window.openSettingsModal = function () {
     if (originalOpenSettingsModal) originalOpenSettingsModal();
     else byId('settingsModal').style.display = 'flex';
     addMultiDeviceButton();
@@ -2692,10 +2692,10 @@ function openQRScanner() {
     const modal = byId('qrScannerModal');
     const video = byId('qrVideo');
     const status = byId('qrScannerStatus');
-    
+
     modal.style.display = 'flex';
     status.textContent = 'Starting camera...';
-    
+
     // Request camera access
     navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
         .then(stream => {
@@ -2716,21 +2716,21 @@ function closeQRScanner() {
     const modal = byId('qrScannerModal');
     const video = byId('qrVideo');
     const status = byId('qrScannerStatus');
-    
+
     modal.style.display = 'none';
-    
+
     // Stop camera
     if (qrScannerStream) {
         qrScannerStream.getTracks().forEach(track => track.stop());
         qrScannerStream = null;
     }
-    
+
     // Stop scanning
     if (qrScannerAnimationId) {
         cancelAnimationFrame(qrScannerAnimationId);
         qrScannerAnimationId = null;
     }
-    
+
     video.srcObject = null;
     status.textContent = 'Position QR code in the frame';
     status.style.color = 'var(--text-secondary)';
@@ -2742,31 +2742,31 @@ function scanQRCode() {
     const canvas = document.createElement('canvas');
     const context = canvas.getContext('2d');
     const status = byId('qrScannerStatus');
-    
+
     function tick() {
         if (video.readyState === video.HAVE_ENOUGH_DATA) {
             canvas.height = video.videoHeight;
             canvas.width = video.videoWidth;
             context.drawImage(video, 0, 0, canvas.width, canvas.height);
-            
+
             const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
             const code = jsQR(imageData.data, imageData.width, imageData.height, {
                 inversionAttempts: "dontInvert",
             });
-            
+
             if (code) {
                 status.textContent = 'QR Code detected! Logging in...';
                 status.style.color = 'var(--success)';
-                
+
                 // Process the scanned token
                 processScannedToken(code.data);
                 return; // Stop scanning
             }
         }
-        
+
         qrScannerAnimationId = requestAnimationFrame(tick);
     }
-    
+
     tick();
 }
 
@@ -2777,7 +2777,7 @@ function processScannedToken(token) {
         device_name: navigator.userAgent.includes('Mobile') ? 'Mobile Device' : 'Desktop',
         device_type: 'web'
     });
-    
+
     // Close scanner after a delay
     setTimeout(() => {
         closeQRScanner();
@@ -2790,7 +2790,7 @@ function loginWithManualToken() {
         showNotification('Please enter a token');
         return;
     }
-    
+
     processScannedToken(token);
 }
 
@@ -2799,15 +2799,15 @@ socket.on('device_paired', data => {
     // Check if we're on the auth screen (QR login)
     const authScreen = byId('auth-screen');
     const isOnAuthScreen = authScreen && authScreen.style.display !== 'none';
-    
+
     if (isOnAuthScreen && data.username) {
         // This is a QR login - auto-login the user
         showNotification(`Logging in as ${data.username}...`);
         username = data.username;
-        
+
         // Register with socket
         socket.emit("register_user", { username: data.username });
-        
+
         // Close QR scanner if open
         closeQRScanner();
     } else if (!isOnAuthScreen) {
@@ -2828,28 +2828,28 @@ function toggleVoicePlay(btn, audioUrl) {
     const progressBar = player.querySelector('.voice-progress');
     const timeDisplay = player.querySelector('.voice-time');
     const playIcon = btn.querySelector('polygon');
-    
+
     // If clicking a different audio, stop current one
     if (currentAudio && currentAudioButton !== btn) {
         currentAudio.pause();
         currentAudioButton.innerHTML = '<svg width="20" height="20" viewBox="0 0 24 24" fill="white"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>';
     }
-    
+
     // Create or reuse audio element
     if (!currentAudio || currentAudioButton !== btn) {
         currentAudio = new Audio(audioUrl);
         currentAudioButton = btn;
-        
+
         // Update progress bar
         currentAudio.addEventListener('timeupdate', () => {
             const progress = (currentAudio.currentTime / currentAudio.duration) * 100;
             progressBar.style.setProperty('--progress', `${progress}%`);
-            
+
             const mins = Math.floor(currentAudio.currentTime / 60);
             const secs = Math.floor(currentAudio.currentTime % 60);
             timeDisplay.textContent = `${mins}:${secs.toString().padStart(2, '0')}`;
         });
-        
+
         // When audio ends
         currentAudio.addEventListener('ended', () => {
             btn.innerHTML = '<svg width="20" height="20" viewBox="0 0 24 24" fill="white"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>';
@@ -2859,7 +2859,7 @@ function toggleVoicePlay(btn, audioUrl) {
             const secs = duration % 60;
             timeDisplay.textContent = `${mins}:${secs.toString().padStart(2, '0')}`;
         });
-        
+
         // Set initial duration
         currentAudio.addEventListener('loadedmetadata', () => {
             const duration = Math.floor(currentAudio.duration);
@@ -2868,7 +2868,7 @@ function toggleVoicePlay(btn, audioUrl) {
             timeDisplay.textContent = `${mins}:${secs.toString().padStart(2, '0')}`;
         });
     }
-    
+
     // Toggle play/pause
     if (currentAudio.paused) {
         currentAudio.play();
@@ -2888,35 +2888,35 @@ let swipedMessage = null;
 
 document.addEventListener('DOMContentLoaded', () => {
     const messagesContainer = byId('messages');
-    
+
     messagesContainer.addEventListener('touchstart', (e) => {
         const message = e.target.closest('.message');
         if (!message || message.classList.contains('system-message')) return;
-        
+
         touchStartX = e.touches[0].clientX;
         touchStartY = e.touches[0].clientY;
         swipedMessage = message;
     });
-    
+
     messagesContainer.addEventListener('touchmove', (e) => {
         if (!swipedMessage) return;
-        
+
         touchCurrentX = e.touches[0].clientX;
         const touchCurrentY = e.touches[0].clientY;
         const diffX = touchCurrentX - touchStartX;
         const diffY = touchCurrentY - touchStartY;
-        
+
         // Only horizontal swipe
         if (Math.abs(diffY) > Math.abs(diffX)) return;
-        
+
         // Limit swipe distance
         const maxSwipe = 80;
         const swipeAmount = Math.max(-maxSwipe, Math.min(maxSwipe, diffX));
-        
+
         if (Math.abs(swipeAmount) > 10) {
             e.preventDefault();
             swipedMessage.style.transform = `translateX(${swipeAmount}px)`;
-            
+
             // Show action buttons
             if (swipeAmount > 40) {
                 swipedMessage.classList.add('swiped-right');
@@ -2927,12 +2927,12 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }
     });
-    
+
     messagesContainer.addEventListener('touchend', (e) => {
         if (!swipedMessage) return;
-        
+
         const diffX = touchCurrentX - touchStartX;
-        
+
         // Trigger actions
         if (diffX > 60) {
             // Swipe right - Reply
@@ -2947,7 +2947,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 deleteMessage(messageId);
             }
         }
-        
+
         // Reset
         swipedMessage.style.transform = '';
         swipedMessage.classList.remove('swiped-right', 'swiped-left');
@@ -2963,10 +2963,10 @@ let currentProfileUser = null;
 
 function showUserProfile(targetUsername) {
     currentProfileUser = targetUsername;
-    
+
     // Request profile data
     socket.emit('get_user_profile', { username: targetUsername });
-    
+
     // Show modal
     byId('userProfileModal').style.display = 'flex';
     byId('profileUsername').textContent = `${targetUsername}'s Profile`;
@@ -2979,15 +2979,15 @@ socket.on('user_profile', data => {
         closeUserProfileModal();
         return;
     }
-    
-    byId('profileAvatar').src = data.avatar_url || '/static/default-avatar.png';
+
+    byId('profileAvatar').src = data.avatar_url || '/static/default-avatar.svg';
     byId('profileBio').value = data.bio || 'No bio yet...';
-    
+
     // Status
     const statusDiv = byId('profileStatus');
     const statusDot = statusDiv.querySelector('.status-dot');
     const statusText = statusDiv.querySelector('span:not(.status-dot)');
-    
+
     if (data.is_online) {
         statusDot.style.background = '#10b981';
         statusText.textContent = 'Online';
@@ -2995,11 +2995,11 @@ socket.on('user_profile', data => {
         statusDot.style.background = '#6b7280';
         statusText.textContent = `Last seen: ${data.last_seen || 'Unknown'}`;
     }
-    
+
     // Mutual groups
     const mutualGroupsList = byId('mutualGroupsList');
     if (data.mutual_groups && data.mutual_groups.length > 0) {
-        mutualGroupsList.innerHTML = data.mutual_groups.map(group => 
+        mutualGroupsList.innerHTML = data.mutual_groups.map(group =>
             `<div style="padding: 4px 0;">${group}</div>`
         ).join('');
     } else {
@@ -3014,7 +3014,7 @@ function closeUserProfileModal() {
 
 function blockUser() {
     if (!currentProfileUser) return;
-    
+
     if (confirm(`Are you sure you want to block ${currentProfileUser}?`)) {
         socket.emit('block_user', { username: currentProfileUser });
         showNotification(`${currentProfileUser} has been blocked`);
@@ -3032,12 +3032,12 @@ function openMediaGallery() {
         showNotification('Please select a chat first');
         return;
     }
-    
+
     currentMediaRecipient = currentRecipient;
     byId('mediaGalleryModal').style.display = 'flex';
-    
+
     // Request media
-    socket.emit('get_media_gallery', { 
+    socket.emit('get_media_gallery', {
         recipient: currentRecipient,
         is_group: currentIsGroup
     });
@@ -3048,18 +3048,18 @@ socket.on('media_gallery', data => {
         showNotification(data.error);
         return;
     }
-    
+
     displayMediaGallery(data.media);
 });
 
 function displayMediaGallery(mediaList) {
     const grid = byId('mediaGalleryGrid');
-    
+
     if (!mediaList || mediaList.length === 0) {
         grid.innerHTML = '<p style="color: var(--text-tertiary); text-align: center; padding: 20px; grid-column: 1/-1;">No media found</p>';
         return;
     }
-    
+
     // Filter media
     let filteredMedia = mediaList;
     if (currentMediaFilter === 'images') {
@@ -3069,7 +3069,7 @@ function displayMediaGallery(mediaList) {
     } else if (currentMediaFilter === 'files') {
         filteredMedia = mediaList.filter(m => m.type === 'file');
     }
-    
+
     grid.innerHTML = filteredMedia.map(media => {
         if (media.type === 'image') {
             return `
@@ -3095,12 +3095,12 @@ function displayMediaGallery(mediaList) {
 
 function filterMediaGallery(filter) {
     currentMediaFilter = filter;
-    
+
     // Update active button
     ['filterAll', 'filterImages', 'filterVideos', 'filterFiles'].forEach(id => {
         byId(id).classList.remove('active');
     });
-    
+
     const filterMap = {
         'all': 'filterAll',
         'images': 'filterImages',
@@ -3108,9 +3108,9 @@ function filterMediaGallery(filter) {
         'files': 'filterFiles'
     };
     byId(filterMap[filter]).classList.add('active');
-    
+
     // Re-request media
-    socket.emit('get_media_gallery', { 
+    socket.emit('get_media_gallery', {
         recipient: currentMediaRecipient,
         is_group: currentIsGroup
     });
@@ -3138,14 +3138,14 @@ function openNotificationSettings() {
         showNotification('Please select a chat first');
         return;
     }
-    
+
     // Load saved settings
     const settings = getNotificationSettings(currentRecipient);
     byId('enableNotifications').checked = settings.enabled;
     byId('muteDuration').value = settings.muted_until;
     byId('notificationSound').value = settings.sound;
     byId('showPreview').checked = settings.show_preview;
-    
+
     byId('notificationSettingsModal').style.display = 'flex';
 }
 
@@ -3155,14 +3155,14 @@ function closeNotificationSettingsModal() {
 
 function saveNotificationSettings() {
     if (!currentRecipient) return;
-    
+
     const settings = {
         enabled: byId('enableNotifications').checked,
         muted_until: parseInt(byId('muteDuration').value),
         sound: byId('notificationSound').value,
         show_preview: byId('showPreview').checked
     };
-    
+
     // Calculate mute expiry
     if (settings.muted_until > 0) {
         settings.muted_expiry = Date.now() + (settings.muted_until * 1000);
@@ -3171,12 +3171,12 @@ function saveNotificationSettings() {
     } else {
         settings.muted_expiry = 0; // Not muted
     }
-    
+
     // Save to localStorage
     const allSettings = JSON.parse(localStorage.getItem('notificationSettings') || '{}');
     allSettings[currentRecipient] = settings;
     localStorage.setItem('notificationSettings', JSON.stringify(allSettings));
-    
+
     showNotification('Notification settings saved');
     closeNotificationSettingsModal();
 }
@@ -3190,13 +3190,13 @@ function getNotificationSettings(recipient) {
         sound: 'default',
         show_preview: true
     };
-    
+
     // Check if mute has expired
     if (settings.muted_expiry > 0 && settings.muted_expiry < Date.now()) {
         settings.muted_until = 0;
         settings.muted_expiry = 0;
     }
-    
+
     return settings;
 }
 
@@ -3214,13 +3214,13 @@ let pinnedMessages = {};
 
 function togglePinMessage(messageId) {
     if (!currentRecipient) return;
-    
+
     const chatKey = currentRecipient;
     const pinned = pinnedMessages[chatKey] || [];
-    
+
     if (pinned.includes(messageId)) {
         // Unpin
-        socket.emit('unpin_message', { 
+        socket.emit('unpin_message', {
             message_id: messageId,
             recipient: currentRecipient,
             is_group: currentIsGroup
@@ -3231,7 +3231,7 @@ function togglePinMessage(messageId) {
             showNotification('Maximum 3 pinned messages per chat');
             return;
         }
-        socket.emit('pin_message', { 
+        socket.emit('pin_message', {
             message_id: messageId,
             recipient: currentRecipient,
             is_group: currentIsGroup
@@ -3242,19 +3242,19 @@ function togglePinMessage(messageId) {
 socket.on('message_pinned', data => {
     const chatKey = data.chat_id;
     if (!pinnedMessages[chatKey]) pinnedMessages[chatKey] = [];
-    
+
     if (!pinnedMessages[chatKey].includes(data.message_id)) {
         pinnedMessages[chatKey].push(data.message_id);
     }
-    
+
     updatePinnedBanner();
-    
+
     // Add visual indicator to message
     const messageEl = document.querySelector(`[data-message-id="${data.message_id}"]`);
     if (messageEl) {
         messageEl.classList.add('pinned');
     }
-    
+
     showNotification('Message pinned');
 });
 
@@ -3263,22 +3263,22 @@ socket.on('message_unpinned', data => {
     if (pinnedMessages[chatKey]) {
         pinnedMessages[chatKey] = pinnedMessages[chatKey].filter(id => id !== data.message_id);
     }
-    
+
     updatePinnedBanner();
-    
+
     // Remove visual indicator
     const messageEl = document.querySelector(`[data-message-id="${data.message_id}"]`);
     if (messageEl) {
         messageEl.classList.remove('pinned');
     }
-    
+
     showNotification('Message unpinned');
 });
 
 socket.on('pinned_messages', data => {
     pinnedMessages[data.chat_id] = data.pinned_ids;
     updatePinnedBanner();
-    
+
     // Add indicators to messages
     data.pinned_ids.forEach(id => {
         const messageEl = document.querySelector(`[data-message-id="${id}"]`);
@@ -3291,7 +3291,7 @@ socket.on('pinned_messages', data => {
 function updatePinnedBanner() {
     const chatKey = currentRecipient;
     const pinned = pinnedMessages[chatKey] || [];
-    
+
     let banner = byId('pinnedMessagesBanner');
     if (!banner && pinned.length > 0) {
         // Create banner
@@ -3300,12 +3300,12 @@ function updatePinnedBanner() {
         banner.className = 'pinned-messages-banner';
         byId('messages').insertBefore(banner, byId('messages').firstChild);
     }
-    
+
     if (pinned.length === 0) {
         if (banner) banner.remove();
         return;
     }
-    
+
     banner.innerHTML = `
         <div style="display: flex; align-items: center; gap: 8px;">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -3321,7 +3321,7 @@ function updatePinnedBanner() {
 function scrollToFirstPinned() {
     const chatKey = currentRecipient;
     const pinned = pinnedMessages[chatKey] || [];
-    
+
     if (pinned.length > 0) {
         const firstPinned = document.querySelector(`[data-message-id="${pinned[0]}"]`);
         if (firstPinned) {
@@ -3336,19 +3336,19 @@ function scrollToFirstPinned() {
 
 // Update showMessageOptions to include pin option
 const originalShowMessageOptions = showMessageOptions;
-showMessageOptions = function(messageId, messageText) {
+showMessageOptions = function (messageId, messageText) {
     // Call original function (if it exists)
     if (typeof originalShowMessageOptions === 'function') {
         originalShowMessageOptions(messageId, messageText);
     }
-    
+
     // Add pin option to context menu
     const menu = document.querySelector('.message-options-menu');
     if (menu) {
         const chatKey = currentRecipient;
         const pinned = pinnedMessages[chatKey] || [];
         const isPinned = pinned.includes(messageId);
-        
+
         const pinOption = document.createElement('div');
         pinOption.className = 'message-option';
         pinOption.textContent = isPinned ? '📌 Unpin' : '📌 Pin';
@@ -3356,7 +3356,7 @@ showMessageOptions = function(messageId, messageText) {
             togglePinMessage(messageId);
             menu.remove();
         };
-        
+
         menu.insertBefore(pinOption, menu.firstChild);
     }
 };

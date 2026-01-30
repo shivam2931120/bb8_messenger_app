@@ -1,5 +1,5 @@
 // ==================== SOCKET & STATE ====================
-const socket = io();
+const socket = io({ transports: ['polling'], upgrade: false });
 let username = null;
 let currentRecipient = null;
 const sharedKeys = {};
@@ -15,7 +15,7 @@ function showNotification(message) {
     byId('notificationText').textContent = message;
     notif.classList.add('show');
     setTimeout(() => notif.classList.remove('show'), 3000);
-    
+
     // Browser notification if permission granted
     if (Notification.permission === 'granted') {
         new Notification('BB84 Chat', { body: message, icon: '/static/icon.png' });
@@ -42,7 +42,7 @@ async function performAuth(endpoint, user, pass, errorEl) {
         errorEl.style.display = 'block';
         return;
     }
-    
+
     try {
         const response = await fetch(endpoint, {
             method: 'POST',
@@ -50,7 +50,7 @@ async function performAuth(endpoint, user, pass, errorEl) {
             body: JSON.stringify({ username: user, password: pass })
         });
         const data = await response.json();
-        
+
         if (data.success) {
             startChatSession(user);
             requestNotificationPermission();
@@ -65,17 +65,17 @@ async function performAuth(endpoint, user, pass, errorEl) {
 }
 
 function login() {
-    performAuth('/login', 
-        byId('login-username').value.trim(), 
-        byId('login-password').value.trim(), 
+    performAuth('/login',
+        byId('login-username').value.trim(),
+        byId('login-password').value.trim(),
         byId('login-error')
     );
 }
 
 function register() {
-    performAuth('/register', 
-        byId('register-username').value.trim(), 
-        byId('register-password').value.trim(), 
+    performAuth('/register',
+        byId('register-username').value.trim(),
+        byId('register-password').value.trim(),
         byId('register-error')
     );
 }
@@ -114,7 +114,7 @@ function appendMessage(sender, message, data = {}) {
     msgDiv.classList.add("message");
     msgDiv.classList.add(sender === username ? "sent" : "received");
     msgDiv.dataset.messageId = data.id || Date.now();
-    
+
     if (data.pinned) {
         msgDiv.classList.add("pinned");
     }
@@ -125,7 +125,7 @@ function appendMessage(sender, message, data = {}) {
 
     const msgContent = document.createElement("div");
     msgContent.className = "message-content";
-    
+
     // Handle different message types
     if (data.message_type === 'image' && data.file_url) {
         const img = document.createElement("img");
@@ -166,9 +166,9 @@ function appendMessage(sender, message, data = {}) {
     if (data.timestamp) {
         const timestamp = document.createElement("span");
         timestamp.className = "message-timestamp";
-        timestamp.textContent = new Date(data.timestamp).toLocaleTimeString([], { 
-            hour: '2-digit', 
-            minute: '2-digit' 
+        timestamp.textContent = new Date(data.timestamp).toLocaleTimeString([], {
+            hour: '2-digit',
+            minute: '2-digit'
         });
         msgContent.appendChild(timestamp);
     }
@@ -186,7 +186,7 @@ function appendMessage(sender, message, data = {}) {
     const reactionsDiv = document.createElement("div");
     reactionsDiv.className = "message-reactions";
     reactionsDiv.dataset.messageId = data.id || msgDiv.dataset.messageId;
-    
+
     if (data.reactions && data.reactions.length > 0) {
         renderReactions(reactionsDiv, data.reactions);
     }
@@ -195,7 +195,7 @@ function appendMessage(sender, message, data = {}) {
     msgDiv.appendChild(msgContent);
     msgDiv.appendChild(actions);
     msgDiv.appendChild(reactionsDiv);
-    
+
     byId('messages').appendChild(msgDiv);
     byId('messages').scrollTop = byId('messages').scrollHeight;
 }
@@ -203,7 +203,7 @@ function appendMessage(sender, message, data = {}) {
 function renderReactions(container, reactions) {
     container.innerHTML = '';
     const reactionCounts = {};
-    
+
     reactions.forEach(r => {
         if (!reactionCounts[r.emoji]) {
             reactionCounts[r.emoji] = { count: 0, users: [] };
@@ -211,7 +211,7 @@ function renderReactions(container, reactions) {
         reactionCounts[r.emoji].count++;
         reactionCounts[r.emoji].users.push(r.user);
     });
-    
+
     Object.entries(reactionCounts).forEach(([emoji, data]) => {
         const reactionItem = document.createElement("span");
         reactionItem.className = "reaction-item";
@@ -226,7 +226,7 @@ function showTypingIndicator(sender) {
     // Remove existing typing indicators
     const existing = document.querySelector('.typing-indicator');
     if (existing) existing.remove();
-    
+
     const indicator = document.createElement("div");
     indicator.className = "typing-indicator";
     indicator.dataset.sender = sender;
@@ -250,17 +250,17 @@ function hideTypingIndicator(sender) {
 async function handleFileUpload(event) {
     const file = event.target.files[0];
     if (!file) return;
-    
+
     const formData = new FormData();
     formData.append('file', file);
-    
+
     try {
         const response = await fetch('/upload_file', {
             method: 'POST',
             body: formData
         });
         const data = await response.json();
-        
+
         if (data.success) {
             sendFileMessage(data.file_url, data.file_name, data.file_type);
         } else {
@@ -269,24 +269,24 @@ async function handleFileUpload(event) {
     } catch (error) {
         showNotification('File upload error');
     }
-    
+
     event.target.value = '';
 }
 
 async function handleVoiceUpload(event) {
     const file = event.target.files[0];
     if (!file) return;
-    
+
     const formData = new FormData();
     formData.append('file', file);
-    
+
     try {
         const response = await fetch('/upload_file', {
             method: 'POST',
             body: formData
         });
         const data = await response.json();
-        
+
         if (data.success) {
             sendFileMessage(data.file_url, data.file_name, 'voice');
         } else {
@@ -295,13 +295,13 @@ async function handleVoiceUpload(event) {
     } catch (error) {
         showNotification('Voice upload error');
     }
-    
+
     event.target.value = '';
 }
 
 function sendFileMessage(fileUrl, fileName, fileType) {
     if (!currentRecipient) return;
-    
+
     socket.emit("send_message", {
         sender: username,
         recipient: currentRecipient,
@@ -316,7 +316,7 @@ function sendFileMessage(fileUrl, fileName, fileType) {
 function sendMessage() {
     const input = byId('messageInput');
     const text = input.value.trim();
-    
+
     if (text && currentRecipient) {
         socket.emit("send_message", {
             sender: username,
@@ -339,21 +339,21 @@ function handleKey(event) {
 
 function handleTyping() {
     const input = byId('messageInput');
-    
+
     // Auto-resize textarea
     input.style.height = 'auto';
     input.style.height = input.scrollHeight + 'px';
-    
+
     if (!currentRecipient) return;
-    
+
     // Send typing event
     socket.emit("typing", { sender: username, recipient: currentRecipient });
-    
+
     // Clear previous timeout
     if (typingTimeout) {
         clearTimeout(typingTimeout);
     }
-    
+
     // Stop typing after 2 seconds of inactivity
     typingTimeout = setTimeout(() => {
         socket.emit("stop_typing", { sender: username, recipient: currentRecipient });
@@ -365,7 +365,7 @@ function openReactionPicker(messageId) {
     currentMessageId = messageId;
     const picker = byId('reactionPicker');
     picker.style.display = 'block';
-    
+
     // Position picker near mouse
     const rect = event.target.getBoundingClientRect();
     picker.style.left = rect.left + 'px';
@@ -417,7 +417,7 @@ function closeSearchModal() {
     byId('searchModal').style.display = 'none';
 }
 
-byId('searchQuery').addEventListener('input', function() {
+byId('searchQuery').addEventListener('input', function () {
     const query = this.value.trim();
     if (query.length >= 2 && currentRecipient) {
         socket.emit("search_messages", {
@@ -443,20 +443,20 @@ function saveSettings() {
     const statusMessage = byId('statusMessage').value;
     const showLastSeen = byId('showLastSeen').checked;
     const showReadReceipts = byId('showReadReceipts').checked;
-    
+
     socket.emit("update_status", {
         username,
         status,
         status_message: statusMessage
     });
-    
+
     socket.emit("update_privacy_settings", {
         username,
         show_last_seen: showLastSeen,
         show_read_receipts: showReadReceipts,
         allow_messages_from: 'everyone'
     });
-    
+
     closeSettingsModal();
     showNotification('Settings saved!');
 }
@@ -491,16 +491,16 @@ socket.on("update_users", users => {
         if (u === currentRecipient) recipientIsOnline = true;
 
         const li = document.createElement("li");
-        
+
         const statusDot = document.createElement("span");
         statusDot.className = "user-status-dot " + getUserStatusClass(userStatuses[u] || 'online');
-        
+
         const userName = document.createElement("span");
         userName.textContent = u;
-        
+
         li.appendChild(statusDot);
         li.appendChild(userName);
-        
+
         if (u === currentRecipient) li.classList.add('active');
 
         li.onclick = () => {
@@ -548,7 +548,7 @@ socket.on("receive_message", data => {
 
     if (data.sender === currentRecipient || (data.sender === username && partner === currentRecipient)) {
         appendMessage(data.sender, data.message, data);
-        
+
         // Send delivered status
         if (data.sender === currentRecipient) {
             socket.emit("message_delivered", { id: data.id });
@@ -599,12 +599,12 @@ socket.on("message_pinned", data => {
 socket.on("search_results", data => {
     const resultsDiv = byId('searchResults');
     resultsDiv.innerHTML = '';
-    
+
     if (data.results.length === 0) {
         resultsDiv.innerHTML = '<p style="text-align: center; color: #a0aec0; padding: 20px;">No results found</p>';
         return;
     }
-    
+
     data.results.forEach(result => {
         const resultDiv = document.createElement("div");
         resultDiv.style.padding = "12px";
@@ -620,7 +620,7 @@ socket.on("search_results", data => {
 
 socket.on("user_status_changed", data => {
     userStatuses[data.username] = data.status;
-    
+
     // Update user list status dots
     const userList = document.querySelectorAll('#userList li');
     userList.forEach(li => {
@@ -631,7 +631,7 @@ socket.on("user_status_changed", data => {
             }
         }
     });
-    
+
     // Update chat header if this is current recipient
     if (data.username === currentRecipient) {
         updateRecipientStatus(data);
@@ -652,14 +652,14 @@ function updateRecipientStatus(data) {
         'busy': '🔴',
         'offline': '⚫'
     };
-    
+
     let statusStr = statusEmoji[data.status] + ' ' + data.status.charAt(0).toUpperCase() + data.status.slice(1);
     if (data.status_message) {
         statusStr += ' - ' + data.status_message;
     } else if (data.last_seen && data.show_last_seen && data.status === 'offline') {
         statusStr += ' - Last seen ' + new Date(data.last_seen).toLocaleString();
     }
-    
+
     statusText.textContent = statusStr;
 }
 
@@ -669,7 +669,7 @@ socket.on("privacy_settings_info", data => {
 });
 
 // Close modals when clicking outside
-window.onclick = function(event) {
+window.onclick = function (event) {
     if (event.target.classList.contains('modal')) {
         event.target.style.display = 'none';
     }

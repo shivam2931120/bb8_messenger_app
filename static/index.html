@@ -389,10 +389,14 @@
 </head>
 
 <body>
+    <link rel="icon" type="image/x-icon" href="/static/favicon.ico">
     <div class="container">
         <!-- Auth Screen -->
         <div id="auth-screen">
             <div id="login-box" class="auth-box">
+                <div style="text-align: center; margin-bottom: 20px;">
+                    <img src="/static/favicon.ico" alt="Logo" style="width: 64px; height: 64px;">
+                </div>
                 <h2>Welcome Back</h2>
                 <input id="login-username" type="text" placeholder="Username" required>
                 <input id="login-password" type="password" placeholder="Password" required>
@@ -634,7 +638,7 @@
                     </div>
 
                     <script>
-                        const socket = io();
+                        const socket = io({ transports: ['polling'], upgrade: false });
                         let username = null;
                         let currentRecipient = null;
                         const sharedKeys = {};
