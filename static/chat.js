@@ -1394,21 +1394,23 @@ socket.on("connect", () => {
 });
 
 socket.on("connect_error", (error) => {
-    console.error("Connection error:", error);
-
-    // If we get a 400 Bad Request (Session ID unknown) or xhr poll error, force a re-handshake
+    // Silence 400/xhr poll errors (Vercel specific) - just reconnect silently
+    // This prevents the annoying "Connection error" flash every time the poll fails
     if (error.message === 'xhr poll error' || error.message.includes('400') || error.description === 400) {
-        console.log('Session lost or invalid, forcing reconnection...');
+        console.warn('Session lost (400), attempting silent reconnect...');
         setTimeout(() => {
+            if (socket.connected) return;
             socket.disconnect();
             socket.connect();
         }, 1000);
+        return; // Don't show UI error for this
     }
 
+    console.error("Connection error:", error);
     const loginError = byId('login-error');
     const registerError = byId('register-error');
     if (loginError && loginError.parentElement.style.display !== 'none') {
-        loginError.textContent = 'Connection error. Retrying...';
+        loginError.textContent = 'Connection issue. Retrying...';
         loginError.style.display = 'block';
     }
 });
