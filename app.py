@@ -29,7 +29,12 @@ app = Flask(__name__, static_folder="static")
 basedir = os.path.abspath(os.path.dirname(__file__))
 
 # File upload configuration
-UPLOAD_FOLDER = os.path.join(basedir, 'uploads')
+# File upload configuration
+# On Vercel, we must use /tmp for uploads
+if os.environ.get('VERCEL'):
+    UPLOAD_FOLDER = os.path.join('/tmp', 'uploads')
+else:
+    UPLOAD_FOLDER = os.path.join(basedir, 'uploads')
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
@@ -66,14 +71,18 @@ def _find_database_url():
 
 database_url = _find_database_url()
 if database_url and database_url.strip():  # Check if URL is not empty
-    # Normalize common Postgres schemes (some providers give postgres:// while SQLAlchemy
-    # prefers postgresql://).
+    # Normalize common Postgres schemes
     if database_url.startswith('postgres://'):
         database_url = database_url.replace('postgres://', 'postgresql://', 1)
     app.config['SQLALCHEMY_DATABASE_URI'] = database_url
 else:
-    # Fallback to SQLite for local development
-    app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + os.path.join(basedir, 'chat.db')
+    # Fallback to SQLite
+    # On Vercel, root is read-only, so we MUST use /tmp if we fallback to sqlite
+    if os.environ.get('VERCEL'):
+        print("[startup] Warning: No DATABASE_URL found on Vercel. Using ephemeral /tmp/chat.db")
+        app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + os.path.join('/tmp', 'chat.db')
+    else:
+        app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + os.path.join(basedir, 'chat.db')
 
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
@@ -81,13 +90,14 @@ db = SQLAlchemy(app)
 # ------------------ Logging Configuration ------------------
 LOG_TO_FILE = os.environ.get('LOG_TO_FILE', '1') == '1'
 LOG_LEVEL = os.environ.get('LOG_LEVEL', 'INFO')
-LOG_PLAINTEXT = os.environ.get('LOG_PLAINTEXT', '0') == '1'  # Dangerous: logs plaintext messages
+LOG_PLAINTEXT = os.environ.get('LOG_PLAINTEXT', '0') == '1'
 
 logger = logging.getLogger('bb84chat')
 logger.setLevel(getattr(logging, LOG_LEVEL.upper(), logging.INFO))
 formatter = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
 
-if LOG_TO_FILE and not os.environ.get('VERCEL'): # Disable file logging on Vercel (read-only FS)
+# Disable file logging on Vercel (read-only FS)
+if LOG_TO_FILE and not os.environ.get('VERCEL'): 
     os.makedirs(os.path.join(basedir, 'logs'), exist_ok=True)
     fh = RotatingFileHandler(os.path.join(basedir, 'logs', 'chat.log'), maxBytes=5*1024*1024, backupCount=5)
     fh.setLevel(getattr(logging, LOG_LEVEL.upper(), logging.INFO))
@@ -112,15 +122,16 @@ def _maybe_log_plain(text: str) -> str:
 
 # Initialize Socket.IO (must be after app and db)
 # Use 'threading' for Vercel/Serverless compatibility
+# Must use polling transport as Vercel doesn't support persistent sticky websockets well in Python
 socketio = SocketIO(app,
                     cors_allowed_origins="*",
                     async_mode="threading", 
-                    logger=False,
-                    engineio_logger=False,
+                    logger=True, 
+                    engineio_logger=True,
                     ping_timeout=120,
                     ping_interval=25,
-                    allow_upgrades=True,
-                    transports=['polling', 'websocket'])
+                    allow_upgrades=False,
+                    transports=['polling'])
 
 # ------------------ Database Models ------------------
 group_members = db.Table('group_members',
