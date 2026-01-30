@@ -65,7 +65,8 @@ def _find_database_url():
     for key in candidates:
         val = os.environ.get(key)
         if val and val.strip():  # Check if value exists and is not empty
-            print(f"[startup] Found DB env var: {key}")
+            masked_val = val[:15] + "..." + val[-5:] if len(val) > 20 else "..."
+            print(f"[startup] Found DB env var: {key} -> {masked_val}")
             return val
     return None
 
@@ -460,31 +461,39 @@ def register():
     if len(username) < 3 or len(password) < 6:
         return jsonify({"success": False, "error": "Username must be 3+ chars and password 6+ chars"}), 400
 
-    # Check if user already exists in database
-    with app.app_context():
+    try:
+        # Check if user already exists in database
         existing_user = User.query.filter_by(username=username).first()
         if existing_user:
             print(f"Username already taken: {username}")
-            return jsonify({"success": False, "error": "Username taken"})
+            return jsonify({"success": False, "error": "Username already taken"}), 400
         
         # Create new user in database
+        # Use simple hashing for now or verify import
         password_hash = generate_password_hash(password)
         new_user = User(username=username, password_hash=password_hash)
         db.session.add(new_user)
         db.session.commit()
         print(f"User created in database: {username}")
-    
-    # Also save to users.json for local development compatibility
-    users = load_users()
-    users[username] = password_hash
-    save_users(users)
-    
-    # Auto-login after registration
-    session['username'] = username
-    session.permanent = True
-    
-    print(f"Registration successful for: {username}")
-    return jsonify({"success": True, "username": username})
+        
+        # Auto-login after registration
+        session['username'] = username
+        session.permanent = True
+        
+        print(f"Registration successful for: {username}")
+        return jsonify({"success": True, "username": username})
+
+    except Exception as e:
+        db.session.rollback()
+        error_msg = str(e)
+        print(f"Registration Error: {error_msg}")
+        # Check specifically for missing tables (common Vercel issue)
+        if "no such table" in error_msg.lower() or "relation" in error_msg.lower() and "does not exist" in error_msg.lower():
+             return jsonify({
+                 "success": False, 
+                 "error": "Database Error: Tables missing. Did you add DATABASE_URL to Vercel/Prisma? (See console for details)"
+             }), 500
+        return jsonify({"success": False, "error": f"Server Error: {error_msg}"}), 500
 
 @app.route("/check_session", methods=["GET"])
 def check_session():
