@@ -8,12 +8,12 @@ import secrets
 
 # Load environment variables from .env file (for local development)
 # DISABLED for now - use system env vars only
-# try:
-#     from dotenv import load_dotenv
-#     load_dotenv()
-# except ImportError:
-#     # dotenv not installed (production) - Render provides env vars directly
-#     pass
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    # dotenv not installed (production) - Render provides env vars directly
+    pass
 
 from flask import Flask, request, jsonify, send_from_directory, session
 from flask_socketio import SocketIO, emit
