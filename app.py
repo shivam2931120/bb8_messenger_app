@@ -30,11 +30,8 @@ basedir = os.path.abspath(os.path.dirname(__file__))
 
 # File upload configuration
 # File upload configuration
-# On Vercel, we must use /tmp for uploads
-if os.environ.get('VERCEL'):
-    UPLOAD_FOLDER = os.path.join('/tmp', 'uploads')
-else:
-    UPLOAD_FOLDER = os.path.join(basedir, 'uploads')
+# File upload configuration
+UPLOAD_FOLDER = os.path.join(basedir, 'uploads')
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
@@ -124,17 +121,16 @@ def _maybe_log_plain(text: str) -> str:
     return text if LOG_PLAINTEXT else '[REDACTED]'
 
 # Initialize Socket.IO (must be after app and db)
-# Use 'threading' for Vercel/Serverless compatibility
-# Must use polling transport as Vercel doesn't support persistent sticky websockets well in Python
+# Use 'eventlet' for high-performance WebSockets on Render
 socketio = SocketIO(app,
                     cors_allowed_origins="*",
-                    async_mode="threading", 
+                    async_mode="eventlet", 
                     logger=True, 
                     engineio_logger=True,
-                    ping_timeout=120,
+                    ping_timeout=60,
                     ping_interval=25,
-                    allow_upgrades=False,
-                    transports=['polling'])
+                    allow_upgrades=True,
+                    transports=['websocket', 'polling'])
 
 # ------------------ Database Models ------------------
 group_members = db.Table('group_members',

@@ -2,7 +2,7 @@ bidict==0.23.1
 blinker==1.9.0
 click==8.3.1
 dnspython==2.8.0
-# eventlet==0.40.3
+eventlet==0.40.4
 Flask==3.1.2
 Flask-SocketIO==5.5.1
 Flask-SQLAlchemy==3.1.1

@@ -5,9 +5,9 @@ const socket = io({
     reconnectionDelayMax: 5000,
     reconnectionAttempts: 5,
     timeout: 20000,
-    transports: ['polling'], // Force polling for Vercel compatibility
-    upgrade: false,          // Disable upgrade to websocket
-    rememberUpgrade: false
+    // transposts: ['websocket', 'polling'], // Default is fine now
+    upgrade: true,
+    rememberUpgrade: true
 });
 let username = null;
 let currentRecipient = null;
@@ -1394,18 +1394,6 @@ socket.on("connect", () => {
 });
 
 socket.on("connect_error", (error) => {
-    // Silence 400/xhr poll errors (Vercel specific) - just reconnect silently
-    // This prevents the annoying "Connection error" flash every time the poll fails
-    if (error.message === 'xhr poll error' || error.message.includes('400') || error.description === 400) {
-        console.warn('Session lost (400), attempting silent reconnect...');
-        setTimeout(() => {
-            if (socket.connected) return;
-            socket.disconnect();
-            socket.connect();
-        }, 1000);
-        return; // Don't show UI error for this
-    }
-
     console.error("Connection error:", error);
     const loginError = byId('login-error');
     const registerError = byId('register-error');
