@@ -290,7 +290,17 @@ async function performAuth(endpoint, user, pass, errorEl) {
         });
 
         if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
+            // Try to get error message from JSON response
+            try {
+                const errorData = await response.json();
+                throw new Error(errorData.error || errorData.message || `Server Error (${response.status})`);
+            } catch (e) {
+                // If parsing fails or we just threw above
+                if (e.message !== `Server Error (${response.status})` && !e.message.includes('JSON')) {
+                    throw e; // Rethrow actual server error message
+                }
+                throw new Error(`Server Error (${response.status})`);
+            }
         }
 
         const data = await response.json();
@@ -299,15 +309,16 @@ async function performAuth(endpoint, user, pass, errorEl) {
             startChatSession(user);
             requestNotificationPermission();
         } else {
-            errorEl.textContent = data.error || 'Authentication failed';
-            errorEl.style.display = 'block';
+            // Handle success:false in 200 OK response
+            throw new Error(data.error || 'Authentication failed');
         }
     } catch (error) {
         console.error('Auth error:', error);
         if (error.name === 'TypeError' && error.message.includes('fetch')) {
             errorEl.textContent = 'Cannot reach server. Please check your connection.';
         } else {
-            errorEl.textContent = 'Connection error. Please try again.';
+            // Display the actual error message from server
+            errorEl.textContent = error.message;
         }
         errorEl.style.display = 'block';
     }
