@@ -1,23 +1,19 @@
-import eventlet
-eventlet.monkey_patch()
 
 import os
 import json
 import random
 import secrets
+from threading import Lock
 
 # Load environment variables from .env file (for local development)
-# DISABLED for now - use system env vars only
 try:
     from dotenv import load_dotenv
     load_dotenv()
 except ImportError:
-    # dotenv not installed (production) - Render provides env vars directly
     pass
 
 from flask import Flask, request, jsonify, send_from_directory, session
 from flask_socketio import SocketIO, emit
-from threading import Lock
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import text
 import logging
@@ -90,7 +86,8 @@ LOG_PLAINTEXT = os.environ.get('LOG_PLAINTEXT', '0') == '1'  # Dangerous: logs p
 logger = logging.getLogger('bb84chat')
 logger.setLevel(getattr(logging, LOG_LEVEL.upper(), logging.INFO))
 formatter = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
-if LOG_TO_FILE:
+
+if LOG_TO_FILE and not os.environ.get('VERCEL'): # Disable file logging on Vercel (read-only FS)
     os.makedirs(os.path.join(basedir, 'logs'), exist_ok=True)
     fh = RotatingFileHandler(os.path.join(basedir, 'logs', 'chat.log'), maxBytes=5*1024*1024, backupCount=5)
     fh.setLevel(getattr(logging, LOG_LEVEL.upper(), logging.INFO))
@@ -114,9 +111,10 @@ def _maybe_log_plain(text: str) -> str:
     return text if LOG_PLAINTEXT else '[REDACTED]'
 
 # Initialize Socket.IO (must be after app and db)
+# Use 'threading' for Vercel/Serverless compatibility
 socketio = SocketIO(app,
                     cors_allowed_origins="*",
-                    async_mode="eventlet",
+                    async_mode="threading", 
                     logger=False,
                     engineio_logger=False,
                     ping_timeout=120,
@@ -140,6 +138,7 @@ class Group(db.Model):
 
     def __repr__(self):
         return f'<Group {self.name}>'
+
 
 
 class User(db.Model):
