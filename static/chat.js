@@ -1384,15 +1384,21 @@ socket.on("connect", () => {
 
 socket.on("connect_error", (error) => {
     console.error("Connection error:", error);
+
+    // If we get a 400 Bad Request (Session ID unknown) or xhr poll error, force a re-handshake
+    if (error.message === 'xhr poll error' || error.message.includes('400') || error.description === 400) {
+        console.log('Session lost or invalid, forcing reconnection...');
+        setTimeout(() => {
+            socket.disconnect();
+            socket.connect();
+        }, 1000);
+    }
+
     const loginError = byId('login-error');
     const registerError = byId('register-error');
     if (loginError && loginError.parentElement.style.display !== 'none') {
-        loginError.textContent = 'Connection error. Please try again.';
+        loginError.textContent = 'Connection error. Retrying...';
         loginError.style.display = 'block';
-    }
-    if (registerError && registerError.parentElement.style.display !== 'none') {
-        registerError.textContent = 'Connection error. Please try again.';
-        registerError.style.display = 'block';
     }
 });
 
@@ -1402,6 +1408,11 @@ socket.on("reconnect", (attemptNumber) => {
         socket.emit("register_user", username);
         socket.emit("update_status", { username, status: "online" });
         socket.emit("get_user_groups", { username });
+
+        // Re-join current chat if open
+        if (currentRecipient) {
+            joinRoom(currentRecipient, isGroupChat);
+        }
     }
 });
 
@@ -1411,7 +1422,8 @@ socket.on("reconnect_error", (error) => {
 
 socket.on("reconnect_failed", () => {
     console.error("Reconnection failed");
-    showNotification("Connection lost. Please refresh the page.");
+    // Only show alert if completely failed after all attempts
+    // showNotification("Connection lost. Please refresh the page."); 
 });
 
 socket.on("disconnect", () => {

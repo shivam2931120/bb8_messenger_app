@@ -54,6 +54,7 @@ app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=7)
 def _find_database_url():
     # Look for a DB URL in several commonly used environment variable names.
     candidates = [
+        'PRISMA_DATABASE_URL',
         'DATABASE_URL',
         'RAILWAY_DATABASE_URL',
         'POSTGRES_URL',
