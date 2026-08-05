@@ -3,6 +3,8 @@ import os
 import json
 import random
 import secrets
+import time
+from collections import defaultdict, deque
 from threading import Lock
 
 # Load environment variables from .env file (for local development)
@@ -155,6 +157,11 @@ class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(100), unique=True, nullable=False)
     password_hash = db.Column(db.String(200), nullable=False)
+    email = db.Column(db.String(254), nullable=True)
+    email_verified = db.Column(db.Boolean, default=False)
+    verification_token = db.Column(db.String(128), nullable=True)
+    reset_token = db.Column(db.String(128), nullable=True)
+    reset_expires_at = db.Column(db.DateTime, nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     status = db.Column(db.String(50), default='online') # online, away, busy, offline
     status_message = db.Column(db.String(200), nullable=True)
@@ -241,6 +248,19 @@ class DeviceSession(db.Model):
 
     def __repr__(self):
         return f'<DeviceSession {self.device_name} for user {self.user_id}>'
+
+# Small in-process guard for login/register/reset abuse. Production deployments
+# should back this with Redis so limits apply across workers.
+_auth_attempts = defaultdict(deque)
+def _auth_rate_limited(key, limit=12, window=300):
+    now = time.time()
+    attempts = _auth_attempts[key]
+    while attempts and now - attempts[0] > window:
+        attempts.popleft()
+    if len(attempts) >= limit:
+        return True
+    attempts.append(now)
+    return False
 
 class GroupInvitation(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -410,6 +430,8 @@ def admin_get_logs():
 
 @app.route("/login", methods=["POST"])
 def login():
+    if _auth_rate_limited(f"login:{request.remote_addr}"):
+        return jsonify({"success": False, "error": "Too many attempts. Try again in a few minutes."}), 429
     data = request.json
     username = (data.get("username") or "").strip()
     password = data.get("password") or ""
@@ -447,9 +469,12 @@ def login():
 
 @app.route("/register", methods=["POST"])
 def register():
+    if _auth_rate_limited(f"register:{request.remote_addr}", limit=6):
+        return jsonify({"success": False, "error": "Too many registration attempts. Try again later."}), 429
     data = request.json
     username = (data.get("username") or "").strip()
     password = (data.get("password") or "").strip()
+    email = (data.get("email") or "").strip().lower() or None
     
     print(f"Registration attempt for user: {username}")
     
@@ -469,7 +494,11 @@ def register():
         # Create new user in database
         # Use simple hashing for now or verify import
         password_hash = generate_password_hash(password)
-        new_user = User(username=username, password_hash=password_hash)
+        if email and ('@' not in email or len(email) > 254):
+            return jsonify({"success": False, "error": "Enter a valid email address"}), 400
+        verification_token = secrets.token_urlsafe(32) if email else None
+        new_user = User(username=username, password_hash=password_hash, email=email,
+                        verification_token=verification_token, email_verified=not bool(email))
         db.session.add(new_user)
         db.session.commit()
         print(f"User created in database: {username}")
@@ -492,6 +521,49 @@ def register():
                  "error": "Database Error: Tables missing. Did you add DATABASE_URL to Vercel/Prisma? (See console for details)"
              }), 500
         return jsonify({"success": False, "error": f"Server Error: {error_msg}"}), 500
+
+@app.route("/request_password_reset", methods=["POST"])
+def request_password_reset():
+    if _auth_rate_limited(f"reset:{request.remote_addr}", limit=5):
+        return jsonify({"message": "If the account exists, a reset link has been issued."})
+    email = ((request.json or {}).get("email") or "").strip().lower()
+    user = User.query.filter_by(email=email).first() if email else None
+    response = {"message": "If the account exists, a reset link has been issued."}
+    if user:
+        user.reset_token = secrets.token_urlsafe(32)
+        user.reset_expires_at = datetime.utcnow() + timedelta(hours=1)
+        db.session.commit()
+        # A real deployment should send this token through an email provider.
+        if not os.environ.get('VERCEL'):
+            response["reset_token"] = user.reset_token
+    return jsonify(response)
+
+@app.route("/reset_password", methods=["POST"])
+def reset_password():
+    data = request.json or {}
+    token = (data.get("token") or "").strip()
+    password = data.get("password") or ""
+    if len(password) < 6:
+        return jsonify({"success": False, "error": "Password must be at least 6 characters"}), 400
+    user = User.query.filter_by(reset_token=token).first()
+    if not user or not user.reset_expires_at or user.reset_expires_at < datetime.utcnow():
+        return jsonify({"success": False, "error": "Reset link is invalid or expired"}), 400
+    user.password_hash = generate_password_hash(password)
+    user.reset_token = None
+    user.reset_expires_at = None
+    db.session.commit()
+    return jsonify({"success": True, "message": "Password updated"})
+
+@app.route("/verify_email", methods=["POST"])
+def verify_email():
+    token = ((request.json or {}).get("token") or "").strip()
+    user = User.query.filter_by(verification_token=token).first()
+    if not user:
+        return jsonify({"success": False, "error": "Verification token is invalid"}), 400
+    user.email_verified = True
+    user.verification_token = None
+    db.session.commit()
+    return jsonify({"success": True, "message": "Email verified"})
 
 @app.route("/check_session", methods=["GET"])
 def check_session():
@@ -1420,6 +1492,11 @@ def migrate_database_schema():
         # USER TABLE MIGRATIONS
         if table_exists('user'):
             user_migrations = [
+                ("email", "ALTER TABLE \"user\" ADD COLUMN email VARCHAR(254)"),
+                ("email_verified", "ALTER TABLE \"user\" ADD COLUMN email_verified BOOLEAN DEFAULT FALSE"),
+                ("verification_token", "ALTER TABLE \"user\" ADD COLUMN verification_token VARCHAR(128)"),
+                ("reset_token", "ALTER TABLE \"user\" ADD COLUMN reset_token VARCHAR(128)"),
+                ("reset_expires_at", "ALTER TABLE \"user\" ADD COLUMN reset_expires_at TIMESTAMP"),
                 ("status", "ALTER TABLE \"user\" ADD COLUMN status VARCHAR(50) DEFAULT 'online'"),
                 ("status_message", "ALTER TABLE \"user\" ADD COLUMN status_message VARCHAR(200)"),
                 ("last_seen", "ALTER TABLE \"user\" ADD COLUMN last_seen TIMESTAMP DEFAULT NOW()"),
@@ -1822,8 +1899,8 @@ def handle_edit_message(data):
     """Edit an existing message"""
     try:
         message_id = data.get('message_id')
-        new_text = data.get('new_text')
-        editor = data.get('editor')
+        new_text = data.get('new_text') or data.get('new_message')
+        editor = data.get('editor') or data.get('username')
         
         if not message_id or not new_text or not editor:
             return
@@ -1846,7 +1923,9 @@ def handle_edit_message(data):
             
             edit_data = {
                 "message_id": message_id,
+                "id": message_id,
                 "new_text": new_text,
+                "new_message": new_text,
                 "edited": True
             }
             
@@ -1866,7 +1945,7 @@ def handle_delete_message(data):
     """Delete a message"""
     try:
         message_id = data.get('message_id')
-        deleter = data.get('deleter')
+        deleter = data.get('deleter') or data.get('username')
         delete_for_everyone = data.get('delete_for_everyone', False)
         
         if not message_id or not deleter:
@@ -2834,6 +2913,12 @@ def handle_pin_message(data):
         if not message:
             emit("error", {"message": "Message not found"})
             return
+
+        if message.sender != username and message.recipient != username:
+            emit("error", {"message": "You cannot pin this message"})
+            return
+        message.pinned = True
+        db.session.commit()
         
         # Create chat_id for pin tracking
         if is_group:
@@ -2888,6 +2973,10 @@ def handle_unpin_message(data):
             chat_id = "_".join(sorted([username, recipient]))
         
         # Emit to all participants
+        message = Message.query.get(message_id)
+        if message and (message.sender == username or message.recipient == username):
+            message.pinned = False
+            db.session.commit()
         if is_group:
             admins = GroupAdmin.query.filter_by(group_name=recipient).all()
             for admin in admins:

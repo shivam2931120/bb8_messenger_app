@@ -224,11 +224,12 @@ function formatDate(date) {
 function toggleAuth(mode) {
     byId('login-box').style.display = mode === 'login' ? 'block' : 'none';
     byId('register-box').style.display = mode === 'register' ? 'block' : 'none';
+    if (byId('reset-box')) byId('reset-box').style.display = mode === 'reset' ? 'block' : 'none';
     byId('login-error').style.display = 'none';
     byId('register-error').style.display = 'none';
 }
 
-async function performAuth(endpoint, user, pass, errorEl) {
+async function performAuth(endpoint, user, pass, errorEl, extra = {}) {
     if (!user || !pass) {
         errorEl.textContent = 'Please fill in all fields';
         errorEl.style.display = 'block';
@@ -286,7 +287,7 @@ async function performAuth(endpoint, user, pass, errorEl) {
         const response = await fetch(endpoint, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ username: user, password: pass })
+            body: JSON.stringify({ username: user, password: pass, ...extra })
         });
 
         if (!response.ok) {
@@ -336,8 +337,21 @@ function register() {
     performAuth('/register',
         byId('register-username').value.trim(),
         byId('register-password').value.trim(),
-        byId('register-error')
+        byId('register-error'),
+        { email: byId('register-email')?.value.trim() || '' }
     );
+}
+
+async function requestPasswordReset() {
+    const email = byId('reset-email').value.trim();
+    const output = byId('reset-message');
+    if (!email) { output.textContent = 'Enter your account email.'; output.style.display = 'block'; return; }
+    try {
+        const response = await fetch('/request_password_reset', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ email }) });
+        const data = await response.json();
+        output.textContent = data.message || data.error || 'If the account exists, a reset link has been issued.';
+        output.style.display = 'block';
+    } catch (_) { output.textContent = 'Unable to request a reset right now.'; output.style.display = 'block'; }
 }
 
 function startChatSession(user) {
@@ -2986,6 +3000,213 @@ function showUserProfile(targetUsername) {
     byId('profileUsernameField').value = targetUsername;
 }
 
+// ==================== Conversation and upload enhancements ====================
+let conversationFilter = 'all';
+let pinnedConversations = JSON.parse(localStorage.getItem('bb84:pinned-conversations') || '[]');
+
+function setConversationFilter(filter, button) {
+    conversationFilter = filter;
+    document.querySelectorAll('.conversation-filter').forEach(el => el.classList.toggle('active', el === button));
+    applyConversationFilter();
+}
+
+function toggleConversationPin(name, event) {
+    if (event) event.stopPropagation();
+    pinnedConversations = pinnedConversations.includes(name)
+        ? pinnedConversations.filter(item => item !== name)
+        : [...pinnedConversations, name];
+    localStorage.setItem('bb84:pinned-conversations', JSON.stringify(pinnedConversations));
+    applyConversationFilter();
+}
+
+function applyConversationFilter() {
+    document.querySelectorAll('#userList li').forEach(item => {
+        const name = item.dataset.username || '';
+        const online = item.dataset.isGroup === 'true' || ['online', 'away', 'busy'].includes(userStatuses[name] || window.userData?.[name]?.status || 'online');
+        const pinned = pinnedConversations.includes(name);
+        item.classList.toggle('conversation-pinned', pinned);
+        item.style.display = conversationFilter === 'online' && !online || conversationFilter === 'pinned' && !pinned ? 'none' : '';
+        const pin = item.querySelector('.conversation-pin');
+        if (pin) pin.textContent = pinned ? '★' : '☆';
+    });
+}
+
+function decorateConversationItems() {
+    document.querySelectorAll('#userList li').forEach(item => {
+        if (item.querySelector('.conversation-pin')) return;
+        const name = item.dataset.username;
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'conversation-pin';
+        button.title = 'Pin conversation';
+        button.textContent = pinnedConversations.includes(name) ? '★' : '☆';
+        button.onclick = event => toggleConversationPin(name, event);
+        item.appendChild(button);
+    });
+    applyConversationFilter();
+}
+
+const bb84OriginalUpdateUserList = updateUserList;
+updateUserList = function (users) {
+    window.lastMessages = JSON.parse(localStorage.getItem(`bb84:last-messages:${username}`) || '{}');
+    bb84OriginalUpdateUserList(users);
+    decorateConversationItems();
+};
+
+const bb84OriginalUpdateLastMessagePreview = updateLastMessagePreview;
+updateLastMessagePreview = function (usernameKey, text, timestamp) {
+    bb84OriginalUpdateLastMessagePreview(usernameKey, text, timestamp);
+    window.lastMessages = window.lastMessages || {};
+    localStorage.setItem(`bb84:last-messages:${username}`, JSON.stringify(window.lastMessages));
+    const item = document.querySelector(`#userList li[data-username="${CSS.escape(usernameKey)}"]`);
+    if (item && item.parentElement) item.parentElement.prepend(item);
+    decorateConversationItems();
+};
+
+const bb84OriginalIncrementUnread = incrementUnreadBadge;
+incrementUnreadBadge = function (usernameKey) {
+    bb84OriginalIncrementUnread(usernameKey);
+    localStorage.setItem(`bb84:unread:${username}`, JSON.stringify(window.unreadCounts));
+};
+const bb84OriginalClearUnread = clearUnread;
+clearUnread = function (usernameKey) {
+    bb84OriginalClearUnread(usernameKey);
+    localStorage.setItem(`bb84:unread:${username}`, JSON.stringify(window.unreadCounts));
+    socket.emit('mark_as_read', { reader: username, sender: usernameKey });
+};
+
+async function uploadFileWithProgress(file) {
+    if (!file || !currentRecipient) return;
+    const progress = byId('uploadProgress');
+    const bar = progress?.querySelector('span');
+    if (progress) progress.classList.add('active');
+    const formData = new FormData();
+    formData.append('file', file);
+    try {
+        const data = await new Promise((resolve, reject) => {
+            const xhr = new XMLHttpRequest();
+            xhr.open('POST', '/upload_file');
+            xhr.upload.onprogress = event => { if (event.lengthComputable && bar) bar.style.width = `${Math.round(event.loaded / event.total * 100)}%`; };
+            xhr.onload = () => { try { resolve(JSON.parse(xhr.responseText)); } catch (_) { reject(new Error('Invalid upload response')); } };
+            xhr.onerror = () => reject(new Error('Upload failed'));
+            xhr.send(formData);
+        });
+        if (!data.success) throw new Error(data.error || 'Upload failed');
+        sendFileMessage(data.file_url, data.file_name, data.file_type);
+    } catch (error) { showNotification(error.message); }
+    finally { if (progress) { progress.classList.remove('active'); if (bar) bar.style.width = '0%'; } }
+}
+
+handleFileUpload = function (event) {
+    const file = event.target.files[0];
+    event.target.value = '';
+    uploadFileWithProgress(file);
+};
+
+function addLinkPreview(messageDiv, text) {
+    const url = (text || '').match(/https?:\/\/[^\s<]+/i)?.[0];
+    if (!url || messageDiv.querySelector('.link-preview')) return;
+    const preview = document.createElement('a');
+    preview.className = 'link-preview';
+    preview.href = url;
+    preview.target = '_blank';
+    preview.rel = 'noopener noreferrer';
+    preview.textContent = url;
+    const bubble = messageDiv.querySelector('.message-bubble');
+    if (bubble) bubble.appendChild(preview);
+}
+
+const bb84OriginalAppendMessage = appendMessage;
+appendMessage = function (sender, message, data = {}) {
+    bb84OriginalAppendMessage(sender, message, data);
+    const messageDiv = document.querySelector(`[data-message-id="${CSS.escape(String(data.id || ''))}"]`);
+    if (messageDiv) {
+        addLinkPreview(messageDiv, message);
+        if (data.pinned) messageDiv.classList.add('pinned');
+        if (data.starred) messageDiv.classList.add('starred');
+    }
+};
+
+function copyMessage(messageId) {
+    const text = document.querySelector(`[data-message-id="${messageId}"] .message-text`)?.textContent || '';
+    navigator.clipboard?.writeText(text).then(() => showNotification('Message copied')).catch(() => showNotification('Copy unavailable'));
+}
+
+function toggleStarMessage(messageId) {
+    socket.emit('star_message', { message_id: messageId, user: username });
+}
+
+function togglePinFromMenu(messageId) {
+    if (!currentRecipient) return;
+    socket.emit('pin_message', { message_id: messageId, recipient: currentRecipient, is_group: allGroups.some(g => g.name === currentRecipient) });
+}
+
+function showMessageOptions(messageId, sender) {
+    document.querySelector('.message-options-menu')?.remove();
+    const menu = document.createElement('div');
+    menu.className = 'message-options-menu';
+    const own = sender === username;
+    menu.innerHTML = `<div class="menu-item" data-action="reply">↩ Reply</div><div class="menu-item" data-action="copy">▣ Copy</div><div class="menu-item" data-action="react">☺ React</div><div class="menu-item" data-action="pin">⚑ Pin</div><div class="menu-item" data-action="star">★ Star</div>${own ? '<div class="menu-item" data-action="edit">✎ Edit</div><div class="menu-item danger" data-action="delete">⌫ Delete</div>' : ''}`;
+    menu.querySelectorAll('[data-action]').forEach(item => item.onclick = () => {
+        const action = item.dataset.action;
+        if (action === 'reply') replyToMessageFunc(messageId);
+        if (action === 'copy') copyMessage(messageId);
+        if (action === 'react') addReactionToMessage(messageId);
+        if (action === 'pin') togglePinFromMenu(messageId);
+        if (action === 'star') toggleStarMessage(messageId);
+        if (action === 'edit') editMessage(messageId);
+        if (action === 'delete') deleteMessage(messageId, true);
+        menu.remove();
+    });
+    document.body.appendChild(menu);
+    menu.style.left = `${Math.max(12, (window.innerWidth - menu.offsetWidth) / 2)}px`;
+    menu.style.top = `${Math.max(12, (window.innerHeight - menu.offsetHeight) / 2)}px`;
+}
+
+deleteMessage = function (messageId, deleteForEveryone = true) {
+    if (!confirm(deleteForEveryone ? 'Delete this message for everyone?' : 'Delete this message for you?')) return;
+    socket.emit('delete_message', { message_id: messageId, username, delete_for_everyone: deleteForEveryone });
+};
+
+document.addEventListener('DOMContentLoaded', () => {
+    const dropTarget = byId('input-area');
+    if (!dropTarget) return;
+    ['dragenter', 'dragover'].forEach(type => dropTarget.addEventListener(type, event => { event.preventDefault(); dropTarget.classList.add('drag-active'); }));
+    ['dragleave', 'drop'].forEach(type => dropTarget.addEventListener(type, event => { event.preventDefault(); dropTarget.classList.remove('drag-active'); }));
+    dropTarget.addEventListener('drop', event => [...(event.dataTransfer?.files || [])].forEach(uploadFileWithProgress));
+    window.lastMessages = JSON.parse(localStorage.getItem(`bb84:last-messages:${username}`) || '{}');
+});
+
+socket.on('unread_counts', counts => {
+    window.unreadCounts = { ...(JSON.parse(localStorage.getItem(`bb84:unread:${username}`) || '{}')), ...(counts || {}) };
+    Object.entries(window.unreadCounts).forEach(([name, count]) => {
+        const item = document.querySelector(`#userList li[data-username="${CSS.escape(name)}"]`);
+        const badge = item?.querySelector('.unread-badge');
+        if (badge && Number(count) > 0) { badge.textContent = count; badge.style.display = 'inline-block'; }
+    });
+});
+
+socket.on('reaction_added', data => {
+    const container = document.querySelector(`.message-reactions[data-message-id="${CSS.escape(String(data.message_id))}"]`);
+    if (container) { const item = document.createElement('span'); item.className = 'reaction-item'; item.textContent = data.emoji; item.onclick = () => toggleReaction(data.message_id, data.emoji); container.appendChild(item); }
+});
+socket.on('reaction_removed', data => {
+    const container = document.querySelector(`.message-reactions[data-message-id="${CSS.escape(String(data.message_id))}"]`);
+    container?.querySelector('.reaction-item')?.remove();
+});
+socket.on('message_starred', data => document.querySelector(`[data-message-id="${CSS.escape(String(data.message_id))}"]`)?.classList.toggle('starred', data.starred));
+
+toggleReaction = function (messageId, emoji) {
+    const item = document.querySelector(`.message-reactions[data-message-id="${CSS.escape(String(messageId))}"] .reaction-item`);
+    socket.emit(item ? 'remove_reaction' : 'add_reaction', { message_id: messageId, user: username, emoji });
+};
+
+editMessage = function (messageId) {
+    const text = document.querySelector(`[data-message-id="${messageId}"] .message-text`)?.textContent || '';
+    const next = prompt('Edit message', text);
+    if (next && next.trim() && next.trim() !== text) socket.emit('edit_message', { message_id: messageId, new_text: next.trim(), editor: username });
+};
+
 socket.on('user_profile', data => {
     if (data.error) {
         showNotification(data.error);
@@ -3229,6 +3450,7 @@ function togglePinMessage(messageId) {
     if (!currentRecipient) return;
 
     const chatKey = currentRecipient;
+    const currentIsGroup = allGroups.some(group => group.name === currentRecipient);
     const pinned = pinnedMessages[chatKey] || [];
 
     if (pinned.includes(messageId)) {
@@ -3443,3 +3665,140 @@ document.addEventListener('DOMContentLoaded', () => {
         observer.observe(messagesEl, { childList: true, subtree: false });
     }
 });
+
+// ==================== Premium UX states ====================
+function setConnectionState(state, detail = '') {
+    const banner = byId('connectionRecovery');
+    if (!banner) return;
+    if (state === 'connected') { banner.className = 'connection-recovery'; banner.textContent = ''; return; }
+    banner.className = `connection-recovery visible ${state === 'offline' ? 'offline' : ''}`;
+    banner.textContent = detail || (state === 'offline' ? 'Offline · messages will retry when connected' : 'Reconnecting…');
+}
+socket.on('connect', () => setConnectionState('connected'));
+socket.on('disconnect', () => setConnectionState('offline'));
+socket.on('connect_error', () => setConnectionState('reconnecting'));
+socket.on('reconnect_attempt', () => setConnectionState('reconnecting'));
+socket.on('reconnect', () => setConnectionState('connected'));
+
+function showUserSkeletons() {
+    const list = byId('userList');
+    if (list) list.innerHTML = '<li class="skeleton-row" aria-label="Loading conversations"></li><li class="skeleton-row"></li><li class="skeleton-row"></li>';
+}
+function showMessageSkeletons() {
+    const messages = byId('messages');
+    if (messages) messages.innerHTML = '<div class="skeleton-message"></div><div class="skeleton-message mine"></div><div class="skeleton-message"></div>';
+}
+function showMediaSkeletons() {
+    const grid = byId('mediaGalleryGrid');
+    if (grid) grid.innerHTML = '<div class="skeleton-media"></div><div class="skeleton-media"></div><div class="skeleton-media"></div>';
+}
+
+const bb84OriginalSelectUser = selectUser;
+selectUser = function (user, element) {
+    bb84OriginalSelectUser(user, element);
+    showMessageSkeletons();
+};
+const bb84OriginalSelectGroup = selectGroup;
+selectGroup = function (group, element) {
+    bb84OriginalSelectGroup(group, element);
+    showMessageSkeletons();
+};
+
+const bb84OriginalOpenMediaGallery = openMediaGallery;
+openMediaGallery = function () { showMediaSkeletons(); bb84OriginalOpenMediaGallery(); };
+
+const bb84OriginalShowNewMessagesIndicator = showNewMessagesIndicator;
+showNewMessagesIndicator = function () {
+    bb84OriginalShowNewMessagesIndicator();
+    byId('jumpToLatest')?.classList.add('visible');
+    if (!byId('messages')?.querySelector('.unread-separator')) {
+        const separator = document.createElement('div');
+        separator.className = 'unread-separator';
+        separator.textContent = 'New messages';
+        byId('messages')?.appendChild(separator);
+    }
+};
+const bb84OriginalHideNewMessagesIndicator = hideNewMessagesIndicator;
+hideNewMessagesIndicator = function () { bb84OriginalHideNewMessagesIndicator(); byId('jumpToLatest')?.classList.remove('visible'); byId('messages')?.querySelector('.unread-separator')?.remove(); };
+
+function openPinnedPanel() {
+    const existing = byId('pinnedStarredPanel');
+    if (existing) { existing.remove(); return; }
+    const panel = document.createElement('aside');
+    panel.id = 'pinnedStarredPanel';
+    panel.className = 'pinned-starred-panel';
+    const messages = [...document.querySelectorAll('#messages .message')].filter(message => message.classList.contains('pinned') || message.classList.contains('starred'));
+    panel.innerHTML = '<h3>Pinned & starred</h3>';
+    if (!messages.length) panel.innerHTML += '<div class="pinned-starred-item">Nothing saved in this conversation yet.</div>';
+    messages.forEach(message => {
+        const item = document.createElement('div'); item.className = 'pinned-starred-item';
+        item.textContent = `${message.classList.contains('pinned') ? '📌' : '★'} ${message.querySelector('.message-text')?.textContent || 'Media message'}`;
+        item.onclick = () => { message.scrollIntoView({behavior:'smooth', block:'center'}); panel.remove(); };
+        panel.appendChild(item);
+    });
+    byId('chat-window')?.appendChild(panel);
+}
+
+function addUnreadSeparator() {
+    const messages = byId('messages');
+    if (!messages || messages.querySelector('.unread-separator')) return;
+    const separator = document.createElement('div'); separator.className = 'unread-separator'; separator.textContent = 'New messages'; messages.appendChild(separator);
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    if (!username) showUserSkeletons();
+    const messages = byId('messages');
+    const jump = byId('jumpToLatest');
+    const overlay = byId('chatDropOverlay');
+    if (jump) jump.onclick = () => { messages.scrollTo({top: messages.scrollHeight, behavior: 'smooth'}); hideNewMessagesIndicator(); };
+    if (messages) messages.addEventListener('scroll', () => { if (isMessagesAtBottom()) hideNewMessagesIndicator(); });
+    const chatWindow = byId('chat-window');
+    if (chatWindow && overlay) {
+        let dragDepth = 0;
+        chatWindow.addEventListener('dragenter', event => { event.preventDefault(); dragDepth++; overlay.classList.add('active'); });
+        chatWindow.addEventListener('dragleave', event => { event.preventDefault(); if (--dragDepth <= 0) { dragDepth = 0; overlay.classList.remove('active'); } });
+        chatWindow.addEventListener('dragover', event => event.preventDefault());
+        chatWindow.addEventListener('drop', event => { event.preventDefault(); dragDepth = 0; overlay.classList.remove('active'); [...(event.dataTransfer?.files || [])].forEach(uploadFileWithProgress); });
+    }
+});
+
+socket.on('chat_history', () => { byId('messages')?.querySelectorAll('.skeleton-message').forEach(el => el.remove()); });
+socket.on('group_history', () => { byId('messages')?.querySelectorAll('.skeleton-message').forEach(el => el.remove()); });
+
+const bb84AppendWithPremiumUX = appendMessage;
+appendMessage = function (sender, message, data = {}) {
+    bb84AppendWithPremiumUX(sender, message, data);
+    const id = String(data.id || '');
+    const messageDiv = [...document.querySelectorAll('#messages .message')].find(el => el.dataset.messageId === id) || document.querySelector('#messages .message:last-of-type');
+    if (!messageDiv || !data.file_url) return;
+    if (data.message_type === 'video' || /\.(mp4|webm|mov)(\?|$)/i.test(data.file_url)) {
+        const old = messageDiv.querySelector('.message-file');
+        const video = document.createElement('video');
+        video.className = 'message-video'; video.controls = true; video.preload = 'metadata'; video.src = data.file_url;
+        if (old) old.replaceWith(video); else messageDiv.querySelector('.message-bubble')?.appendChild(video);
+    }
+    const image = messageDiv.querySelector('.message-image');
+    if (image) image.onclick = () => typeof openLightbox === 'function' ? openLightbox(data.file_url) : window.open(data.file_url, '_blank');
+};
+
+function setActivityStatus(text, timeout = 0) {
+    const status = byId('activityStatus');
+    if (!status) return;
+    status.textContent = text || '';
+    if (timeout) setTimeout(() => { if (status.textContent === text) status.textContent = ''; }, timeout);
+}
+
+const bb84UploadWithStatus = uploadFileWithProgress;
+uploadFileWithProgress = async function (file) {
+    if (file) setActivityStatus(`Uploading ${file.name}…`);
+    try { await bb84UploadWithStatus(file); setActivityStatus('Upload complete', 1800); }
+    catch (error) { setActivityStatus('Upload failed · try again', 3500); throw error; }
+};
+
+const bb84OriginalStartRecording = startRecording;
+startRecording = async function () { setActivityStatus('Recording voice message…'); await bb84OriginalStartRecording(); };
+const bb84OriginalStopRecording = stopRecording;
+stopRecording = function () { bb84OriginalStopRecording(); setActivityStatus('Voice message ready', 1800); };
+
+socket.on('error', data => setActivityStatus(data?.message || 'Something went wrong', 3500));
+socket.on('session_expired', () => { setConnectionState('offline', 'Session expired · sign in again'); showNotification('Your session expired. Please sign in again.'); });
