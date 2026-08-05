@@ -2244,6 +2244,7 @@
             }
         }
     </style>
+    <link rel="stylesheet" href="/static/cyber.css">
 </head>
 
 <body>
@@ -2256,6 +2257,7 @@
                 <input id="login-username" type="text" placeholder="Username" required>
                 <input id="login-password" type="password" placeholder="Password" required>
                 <button onclick="login()">Sign In</button>
+                <button type="button" class="auth-secondary" onclick="toggleAuth('reset')">Forgot password?</button>
 
                 <div style="margin: 20px 0; text-align: center; color: var(--text-tertiary); font-size: 14px;">
                     <span
@@ -2284,10 +2286,19 @@
                 <h2>Create Account</h2>
                 <p class="subtitle">Join BB84 Quantum Chat today</p>
                 <input id="register-username" type="text" placeholder="Choose a username" required>
+                <input id="register-email" type="email" placeholder="Email address (optional)">
                 <input id="register-password" type="password" placeholder="Create a password" required>
                 <button onclick="register()">Sign Up</button>
                 <p class="auth-toggle">Already have an account? <a onclick="toggleAuth('login')">Sign In</a></p>
                 <p id="register-error" class="error" style="display: none;"></p>
+            </div>
+            <div id="reset-box" class="auth-box" style="display: none;">
+                <h2>Reset Access</h2>
+                <p class="subtitle">Request a secure password reset link</p>
+                <input id="reset-email" type="email" placeholder="Email address" required>
+                <button onclick="requestPasswordReset()">Send Reset Link</button>
+                <p id="reset-message" class="error" style="display: none;"></p>
+                <p class="auth-toggle">Remembered it? <a onclick="toggleAuth('login')">Sign In</a></p>
             </div>
         </div>
 
@@ -2333,6 +2344,23 @@
                             oninput="filterUsers()">
                     </div>
                 </div>
+                <div class="sidebar-notification">
+                    <div class="notification-icon">✦</div>
+                    <div>
+                        <strong>Notifications</strong>
+                        <span>Everything is up to date</span>
+                    </div>
+                    <button type="button" class="notification-add" aria-label="Add notification">+</button>
+                </div>
+                <div class="sidebar-section-label">
+                    <span>Conversations</span>
+                    <span class="member-count" id="memberCount">LIVE</span>
+                </div>
+                <div class="conversation-controls">
+                    <button type="button" class="conversation-filter active" data-filter="all" onclick="setConversationFilter('all', this)">All</button>
+                    <button type="button" class="conversation-filter" data-filter="online" onclick="setConversationFilter('online', this)">Online</button>
+                    <button type="button" class="conversation-filter" data-filter="pinned" onclick="setConversationFilter('pinned', this)">Pinned</button>
+                </div>
                 <ul id="userList"></ul>
 
                 <!-- Logout Button at Bottom -->
@@ -2351,6 +2379,7 @@
 
             <!-- Chat Window -->
             <div id="chat-window">
+                <div id="connectionRecovery" class="connection-recovery" role="status" aria-live="polite"></div>
                 <div id="chat-header">
                     <button class="mobile-back-btn" onclick="showSidebar()" style="display: none;">
                         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -2400,6 +2429,7 @@
                                 <polyline points="21 15 16 10 5 21"></polyline>
                             </svg>
                         </button>
+                        <button class="header-btn" onclick="openPinnedPanel()" title="Pinned and starred messages">★</button>
                         <button class="header-btn" onclick="openNotificationSettings()" title="Notifications">
                             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                                 stroke-width="2">
@@ -2430,11 +2460,21 @@
                     </div>
                 </div>
                 <div id="messages">
-                    <p id="welcome">Select a user to start chatting</p>
+                    <div id="welcome" class="empty-chat-state">
+                        <div class="empty-chat-orb">✦</div>
+                        <h2>Your conversations, beautifully focused.</h2>
+                        <p>Select a member from the sidebar to start a secure conversation.</p>
+                        <span class="empty-chat-hint">Tip · Press Enter to send</span>
+                    </div>
                 </div>
                 <!-- New messages indicator -->
                 <div id="newMessagesIndicator" class="new-messages" style="display:none">New messages ↓</div>
+                <button id="jumpToLatest" class="jump-to-latest" type="button">↓ Jump to latest</button>
+                <div id="chatDropOverlay" class="chat-drop-overlay" aria-hidden="true">
+                    <div><strong>Drop files to share</strong><span>Images, documents, and media</span></div>
+                </div>
                 <div id="input-area">
+                    <div id="activityStatus" class="activity-status" aria-live="polite"></div>
                     <div class="recording-indicator" id="recordingIndicator">
                         <span class="recording-dot"></span>
                         <span id="recordingTime">0:00</span>
@@ -2465,6 +2505,7 @@
                             <input type="file" id="fileInput" accept="image/*,.pdf,.txt"
                                 onchange="handleFileUpload(event)">
                         </div>
+                        <div id="uploadProgress" class="upload-progress" aria-live="polite"><span></span></div>
                         <textarea id="messageInput" placeholder="Type a message..." rows="1" oninput="handleTyping()"
                             onkeydown="handleKey(event)"></textarea>
                         <button id="sendBtn" class="input-icon-btn" onclick="sendMessage()">
