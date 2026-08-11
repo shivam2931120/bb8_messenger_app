@@ -2872,6 +2872,22 @@
         <span id="notificationText"></span>
     </div>
 
+    <div id="appErrorModal" class="modal app-error-modal" role="alertdialog" aria-modal="true"
+        aria-labelledby="appErrorTitle" aria-describedby="appErrorMessage" hidden>
+        <div class="modal-content app-error-content">
+            <div class="app-error-icon" aria-hidden="true">!</div>
+            <div class="modal-header" id="appErrorTitle">Connection interrupted</div>
+            <div class="modal-body">
+                <p id="appErrorMessage">Something went wrong. Your session is safe.</p>
+                <p id="appErrorDetails" class="app-error-details" hidden></p>
+            </div>
+            <div class="modal-buttons">
+                <button type="button" class="btn-secondary" onclick="closeAppError()">Dismiss</button>
+                <button type="button" class="btn-primary" onclick="retryAppError()">Try again</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Floating new chat button removed (kept functionality in JS guarded if needed) -->
 
     <script src="/static/chat.js"></script>

@@ -618,6 +618,25 @@ def uploaded_file(filename):
     return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
 
 
+# Browser navigation errors get a branded recovery page. JSON/API callers keep
+# a machine-readable response so fetch clients can handle the status normally.
+def _error_response(template, status, message):
+    if request.accept_mimetypes.best == 'application/json' or request.path.startswith('/api/'):
+        return jsonify({'success': False, 'error': message, 'status': status}), status
+    return send_from_directory('static', template), status
+
+
+@app.errorhandler(404)
+def handle_not_found(error):
+    return _error_response('404.html', 404, 'The requested page could not be found.')
+
+
+@app.errorhandler(500)
+def handle_server_error(error):
+    logger.exception('Unhandled server error: %s', error)
+    return _error_response('500.html', 500, 'Something went wrong on the server.')
+
+
 # ------------------ WebSocket Events ------------------
 @socketio.on("connect")
 def handle_connect():

@@ -230,6 +230,16 @@ body::after { right: -240px; bottom: -250px; background: #d946ef; animation-dela
 .modal input, .modal textarea, .modal select { background: rgba(255,255,255,.05); color: #fff; border-color: var(--cyber-border); }
 .btn-primary { background: var(--cyber-gradient); box-shadow: 0 14px 30px rgba(106,72,242,.26); }
 
+.app-error-modal[hidden] { display: none !important; }
+.app-error-content { width: min(430px, calc(100vw - 32px)); padding: 28px; text-align: center; }
+.app-error-icon { width: 48px; height: 48px; display: grid; place-items: center; margin: 0 auto 14px; border-radius: 15px; background: rgba(251,113,133,.14); border: 1px solid rgba(251,113,133,.35); color: #fda4af; font-size: 22px; font-weight: 800; }
+.app-error-content .modal-header { margin-bottom: 8px; }
+.app-error-content .modal-body { color: var(--cyber-muted); }
+.app-error-content .modal-body p { margin: 0; line-height: 1.55; }
+.app-error-details { margin-top: 10px !important; color: var(--cyber-faint); font-size: 12px; }
+.app-error-content .modal-buttons { justify-content: center; margin-top: 22px; }
+.app-error-content .btn-secondary { border: 1px solid var(--cyber-border); border-radius: 10px; padding: 10px 16px; color: var(--cyber-muted); background: transparent; cursor: pointer; }
+
 @media (max-width: 900px) {
     #sidebar { width: 280px; min-width: 280px; }
     #messages, #input-area { padding-left: 24px; padding-right: 24px; }

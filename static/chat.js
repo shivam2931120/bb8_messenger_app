@@ -192,6 +192,43 @@ function showNotification(message) {
     }
 }
 
+// A single recovery surface for errors that happen outside a feature's own
+// handler (runtime errors, failed promises, and Socket.IO failures).
+function showAppError(message, details = '') {
+    const modal = byId('appErrorModal');
+    if (!modal) return;
+    byId('appErrorMessage').textContent = message || 'Something went wrong. Please try again.';
+    const detailsEl = byId('appErrorDetails');
+    detailsEl.textContent = details;
+    detailsEl.hidden = !details;
+    modal.hidden = false;
+    modal.style.display = 'flex';
+}
+
+function closeAppError() {
+    const modal = byId('appErrorModal');
+    if (!modal) return;
+    modal.hidden = true;
+    modal.style.display = 'none';
+}
+
+function retryAppError() {
+    closeAppError();
+    if (socket && !socket.connected) socket.connect();
+    else window.location.reload();
+}
+
+window.closeAppError = closeAppError;
+window.retryAppError = retryAppError;
+window.addEventListener('error', (event) => {
+    console.error('Unhandled application error:', event.error || event.message);
+    showAppError('The chat encountered an unexpected error.', 'Please try again or reload the page.');
+});
+window.addEventListener('unhandledrejection', (event) => {
+    console.error('Unhandled promise rejection:', event.reason);
+    showAppError('The request could not be completed.', 'Check your connection and try again.');
+});
+
 function requestNotificationPermission() {
     if ('Notification' in window && Notification.permission === 'default') {
         Notification.requestPermission();
@@ -1415,6 +1452,7 @@ socket.on("connect_error", (error) => {
         loginError.textContent = 'Connection issue. Retrying...';
         loginError.style.display = 'block';
     }
+    if (username) showAppError('Unable to connect to BB84 Chat.', 'We will keep trying to reconnect. You can also retry now.');
 });
 
 socket.on("reconnect", (attemptNumber) => {
@@ -1443,6 +1481,11 @@ socket.on("reconnect_failed", () => {
 
 socket.on("disconnect", () => {
     console.log("Disconnected from server");
+});
+
+socket.on('error', (data) => {
+    const message = typeof data === 'string' ? data : data?.message;
+    showAppError(message || 'The server could not complete that action.');
 });
 
 socket.on("update_users", data => {
