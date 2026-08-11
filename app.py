@@ -33,7 +33,9 @@ basedir = os.path.abspath(os.path.dirname(__file__))
 # File upload configuration
 # File upload configuration
 # File upload configuration
-UPLOAD_FOLDER = os.path.join(basedir, 'uploads')
+# Vercel's deployed bundle is read-only; temporary files must live in /tmp.
+UPLOAD_ROOT = '/tmp' if os.environ.get('VERCEL') else basedir
+UPLOAD_FOLDER = os.path.join(UPLOAD_ROOT, 'uploads')
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
