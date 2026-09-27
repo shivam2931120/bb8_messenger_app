@@ -17,7 +17,7 @@ except ImportError:
 from flask import Flask, request, jsonify, send_from_directory, session
 from flask_socketio import SocketIO, emit
 from flask_sqlalchemy import SQLAlchemy
-from sqlalchemy import text
+from sqlalchemy import MetaData, Table, inspect, literal, or_, select, text
 import logging
 from logging.handlers import RotatingFileHandler
 import base64
@@ -146,6 +146,7 @@ class Group(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), unique=True, nullable=False)
     creator_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, server_default=db.func.now(), nullable=False)
     creator = db.relationship('User', foreign_keys=[creator_id], backref='created_groups')
     members = db.relationship('User', secondary=group_members, lazy='subquery',
                               backref=db.backref('groups', lazy=True))
@@ -200,7 +201,7 @@ class Message(db.Model):
 
 class MessageReaction(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    message_id = db.Column(db.Integer, db.ForeignKey('message.id'), nullable=False)
+    message_id = db.Column(db.Integer, db.ForeignKey('message.id', ondelete='CASCADE'), nullable=False)
     user = db.Column(db.String(100), nullable=False)
     emoji = db.Column(db.String(10), nullable=False)
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
@@ -704,18 +705,8 @@ def handle_register_user(username):
             ).group_by(Message.sender).all()
             emit("unread_counts", dict(unread_counts))
     except Exception as e:
-        print(f"[startup] unread_counts query failed: {e} - attempting to heal schema and retry")
-        try:
-            # Attempt to heal schema drift and retry once
-            _ensure_message_columns_exist()
-            with app.app_context():
-                unread_counts = db.session.query(Message.sender, db.func.count(Message.id)).filter(
-                    Message.recipient == username,
-                    Message.read == False
-                ).group_by(Message.sender).all()
-                emit("unread_counts", dict(unread_counts))
-        except Exception as e2:
-            print(f"[startup] unread_counts retry failed: {e2}")
+        print(f"[startup] unread_counts query failed: {e}")
+        emit("unread_counts", {})
 
 
 # ------------------ BB84 and eavesdrop socket handlers ------------------
@@ -1117,6 +1108,25 @@ def handle_stop_typing(data):
 
 # ==================== NEW FEATURES ====================
 
+def _message_group(message):
+    if message.group_id is not None:
+        group = db.session.get(Group, message.group_id)
+        if group:
+            return group
+    if message.recipient:
+        group = Group.query.filter_by(name=message.recipient).first()
+        if group and any(member.username == message.sender for member in group.members):
+            return group
+    return None
+
+
+def _message_participant_usernames(message):
+    group = _message_group(message)
+    if group:
+        return {message.sender} | {member.username for member in group.members}
+    return {name for name in (message.sender, message.recipient) if name}
+
+
 # Message Reactions
 @socketio.on("add_reaction")
 def handle_add_reaction(data):
@@ -1138,23 +1148,11 @@ def handle_add_reaction(data):
             # Get the message to notify both users
             msg = Message.query.get(message_id)
             if msg:
-                # Notify sender
-                sender_sid = online_users.get(msg.sender)
-                if sender_sid:
-                    emit("reaction_added", {
-                        "message_id": message_id, 
-                        "user": user, 
-                        "emoji": emoji
-                    }, room=sender_sid)
-                
-                # Notify recipient
-                recipient_sid = online_users.get(msg.recipient)
-                if recipient_sid:
-                    emit("reaction_added", {
-                        "message_id": message_id, 
-                        "user": user, 
-                        "emoji": emoji
-                    }, room=recipient_sid)
+                payload = {"message_id": message_id, "user": user, "emoji": emoji}
+                for participant in _message_participant_usernames(msg):
+                    participant_sid = online_users.get(participant)
+                    if participant_sid:
+                        emit("reaction_added", payload, room=participant_sid)
 
 
 @socketio.on("remove_reaction")
@@ -1175,23 +1173,11 @@ def handle_remove_reaction(data):
             # Get the message to notify both users
             msg = Message.query.get(message_id)
             if msg:
-                # Notify sender
-                sender_sid = online_users.get(msg.sender)
-                if sender_sid:
-                    emit("reaction_removed", {
-                        "message_id": message_id, 
-                        "user": user, 
-                        "emoji": emoji
-                    }, room=sender_sid)
-                
-                # Notify recipient
-                recipient_sid = online_users.get(msg.recipient)
-                if recipient_sid:
-                    emit("reaction_removed", {
-                        "message_id": message_id, 
-                        "user": user, 
-                        "emoji": emoji
-                    }, room=recipient_sid)
+                payload = {"message_id": message_id, "user": user, "emoji": emoji}
+                for participant in _message_participant_usernames(msg):
+                    participant_sid = online_users.get(participant)
+                    if participant_sid:
+                        emit("reaction_removed", payload, room=participant_sid)
 
 
 # Message Organization
@@ -1441,239 +1427,256 @@ def handle_clear_history(data):
             emit("history_cleared", room=sid)
 
 
-def _ensure_message_columns_exist():
-    """Ensure the Message table has the expected columns.
+def _legacy_table_mappings(table_name, row, user_ids, group_ids):
+    """Translate known pre-ORM column names into the current model fields."""
+    values = dict(row)
 
-    Safe to run at startup. Returns list of added columns.
-    """
-    added = []
-    with app.app_context():
+    if table_name == 'message_reaction':
+        if values.get('user') is None:
+            values['user'] = values.get('username')
+        if values.get('emoji') is None:
+            values['emoji'] = values.get('reaction')
+    elif table_name == 'group_admin':
+        if values.get('group_id') is None:
+            values['group_id'] = group_ids.get(values.get('group_name'))
+        if values.get('user_id') is None:
+            values['user_id'] = user_ids.get(values.get('username'))
+        if values.get('can_edit_group') is None:
+            values['can_edit_group'] = values.get('can_edit_info')
+        if values.get('appointed_at') is None:
+            values['appointed_at'] = values.get('joined_at')
+    elif table_name == 'device_session':
+        if values.get('user_id') is None:
+            values['user_id'] = user_ids.get(values.get('username'))
+        if values.get('created_at') is None:
+            values['created_at'] = values.get('paired_at')
+    elif table_name == 'group_invitation':
+        if values.get('group_id') is None:
+            values['group_id'] = group_ids.get(values.get('group_name'))
+        if values.get('invited_by') is None:
+            values['invited_by'] = user_ids.get(values.get('created_by'))
+        if values.get('invite_token') is None:
+            values['invite_token'] = values.get('token')
+        # The old open-link format has no invitee. Keep those rows in the
+        # archived table instead of inventing an invited_user value.
+
+    return values
+
+
+def _rebuild_legacy_table(table_name):
+    """Replace a known legacy table with the ORM schema, retaining the old table."""
+    engine = db.engine
+    model_table = db.metadata.tables[table_name]
+    inspector = inspect(engine)
+    column_info = {item['name']: item for item in inspector.get_columns(table_name)}
+    old_columns = set(column_info)
+    model_columns = set(model_table.c.keys())
+
+    legacy_markers = {
+        'message_reaction': {'username', 'reaction'},
+        'group_admin': {'group_name', 'username'},
+        'device_session': {'username', 'paired_at'},
+        'group_invitation': {'group_name', 'token', 'created_by'},
+    }
+    has_legacy_shape = bool(old_columns & legacy_markers.get(table_name, set()))
+    missing_required = {
+        column.name for column in model_table.columns
+        if not column.nullable and not column.primary_key
+        and column.name not in old_columns
+    }
+    extra_required = any(
+        name not in model_columns
+        and not column_info[name].get('nullable', True)
+        and column_info[name].get('default') is None
+        for name in old_columns
+    )
+
+    if not has_legacy_shape or not (missing_required or extra_required):
+        return False
+
+    quote = engine.dialect.identifier_preparer.quote
+    existing_tables = set(inspect(engine).get_table_names())
+    suffix = 1
+    while True:
+        backup_name = f'{table_name}_legacy_{suffix}'
+        staging_name = f'{table_name}_schema_{suffix}'
+        if backup_name not in existing_tables and staging_name not in existing_tables:
+            break
+        suffix += 1
+
+    staging_table = model_table.to_metadata(db.metadata, name=staging_name)
+    copied = 0
+    skipped = 0
+    try:
+        with engine.begin() as connection:
+            connection.execute(text(
+                f'ALTER TABLE {quote(table_name)} RENAME TO {quote(backup_name)}'
+            ))
+            legacy_table = Table(
+                backup_name, MetaData(), autoload_with=connection
+            )
+            staging_table.create(bind=connection)
+            user_ids = {}
+            group_ids = {}
+            if table_name in {'group_admin', 'device_session', 'group_invitation'}:
+                user_ids = {
+                    username: user_id
+                    for user_id, username in connection.execute(
+                        select(User.id, User.username)
+                    ).all()
+                }
+            if table_name in {'group_admin', 'group_invitation'}:
+                group_ids = {
+                    name: group_id
+                    for group_id, name in connection.execute(
+                        select(Group.id, Group.name)
+                    ).all()
+                }
+
+            for row in connection.execute(select(legacy_table)).mappings():
+                values = _legacy_table_mappings(
+                    table_name, dict(row), user_ids, group_ids
+                )
+                insert_values = {}
+                for column in model_table.columns:
+                    if column.name not in values:
+                        continue
+                    value = values[column.name]
+                    if (
+                        value is None and not column.nullable
+                        and (column.default is not None or column.server_default is not None)
+                    ):
+                        continue
+                    insert_values[column.name] = value
+                required_without_default = [
+                    column.name for column in model_table.columns
+                    if not column.nullable and not column.primary_key
+                    and (
+                        column.name not in insert_values
+                        or insert_values[column.name] is None
+                    )
+                    and column.default is None
+                    and column.server_default is None
+                ]
+                if required_without_default:
+                    # Keep untranslatable rows in the renamed legacy table.
+                    skipped += 1
+                    continue
+                connection.execute(staging_table.insert().values(**insert_values))
+                copied += 1
+
+            connection.execute(text(
+                f'ALTER TABLE {quote(staging_name)} RENAME TO {quote(table_name)}'
+            ))
+    finally:
+        db.metadata.remove(staging_table)
+
+    print(
+        f'[migration] Rebuilt {table_name}: copied {copied} rows, '
+        f'kept {skipped} unmappable rows in {backup_name}'
+    )
+    return True
+
+
+def _migration_default_sql(column, engine):
+    """Render only simple defaults that are safe in ALTER TABLE statements."""
+    if column.server_default is not None:
+        expression = column.server_default.arg
         try:
-            engine_name = getattr(db.engine, 'name', None)
+            return str(expression.compile(
+                dialect=engine.dialect,
+                compile_kwargs={'literal_binds': True}
+            ))
         except Exception:
-            engine_name = None
+            return str(expression)
 
-        try:
-            if engine_name == 'postgresql':
-                rows = db.session.execute(text("SELECT column_name FROM information_schema.columns WHERE table_name='message';")).fetchall()
-                existing = {r[0] for r in rows}
-                desired = {
-                    'read': 'boolean DEFAULT false',
-                    'group_id': 'integer',
-                    'status': "varchar(20) DEFAULT 'sent'",
-                    'edited': 'boolean DEFAULT false'
-                }
-                for col, definition in desired.items():
-                    if col not in existing:
-                        db.session.execute(text(f"ALTER TABLE message ADD COLUMN IF NOT EXISTS {col} {definition};"))
-                        added.append(col)
-                db.session.commit()
-            else:
-                # SQLite
-                rows = db.session.execute(text("PRAGMA table_info('message');")).fetchall()
-                existing = {r[1] for r in rows}
-                desired = {
-                    'read': 'BOOLEAN DEFAULT 0',
-                    'group_id': 'INTEGER',
-                    'status': "VARCHAR(20) DEFAULT 'sent'",
-                    'edited': 'BOOLEAN DEFAULT 0'
-                }
-                for col, definition in desired.items():
-                    if col not in existing:
-                        db.session.execute(text(f"ALTER TABLE message ADD COLUMN {col} {definition};"))
-                        added.append(col)
-                db.session.commit()
-        except Exception as e:
-            db.session.rollback()
-            print(f"[startup] _ensure_message_columns_exist failed: {e}")
-    return added
+    if column.default is None:
+        return None
+
+    value = column.default.arg
+    if callable(value):
+        if getattr(value, '__name__', '') in {'utcnow', 'now'}:
+            return 'CURRENT_TIMESTAMP'
+        return None
+
+    return str(literal(value).compile(
+        dialect=engine.dialect,
+        compile_kwargs={'literal_binds': True}
+    ))
 
 
 def migrate_database_schema():
-    """Add missing columns to existing tables - runs on startup"""
+    """Bring existing tables toward the SQLAlchemy schema without discarding legacy data."""
     try:
-        from sqlalchemy import inspect, text
-        inspector = inspect(db.engine)
-        
-        def column_exists(table_name, column_name):
-            try:
-                columns = [col['name'] for col in inspector.get_columns(table_name)]
-                return column_name in columns
-            except Exception:
-                return False
-        
-        def table_exists(table_name):
-            try:
-                return table_name in inspector.get_table_names()
-            except Exception:
-                return False
-        
-        migrations_applied = []
-        
-        # USER TABLE MIGRATIONS
-        if table_exists('user'):
-            user_migrations = [
-                ("email", "ALTER TABLE \"user\" ADD COLUMN email VARCHAR(254)"),
-                ("email_verified", "ALTER TABLE \"user\" ADD COLUMN email_verified BOOLEAN DEFAULT FALSE"),
-                ("verification_token", "ALTER TABLE \"user\" ADD COLUMN verification_token VARCHAR(128)"),
-                ("reset_token", "ALTER TABLE \"user\" ADD COLUMN reset_token VARCHAR(128)"),
-                ("reset_expires_at", "ALTER TABLE \"user\" ADD COLUMN reset_expires_at TIMESTAMP"),
-                ("status", "ALTER TABLE \"user\" ADD COLUMN status VARCHAR(50) DEFAULT 'online'"),
-                ("status_message", "ALTER TABLE \"user\" ADD COLUMN status_message VARCHAR(200)"),
-                ("last_seen", "ALTER TABLE \"user\" ADD COLUMN last_seen TIMESTAMP DEFAULT NOW()"),
-                ("avatar_url", "ALTER TABLE \"user\" ADD COLUMN avatar_url VARCHAR(500)"),
-                ("show_last_seen", "ALTER TABLE \"user\" ADD COLUMN show_last_seen BOOLEAN DEFAULT TRUE"),
-                ("show_read_receipts", "ALTER TABLE \"user\" ADD COLUMN show_read_receipts BOOLEAN DEFAULT TRUE"),
-                ("allow_messages_from", "ALTER TABLE \"user\" ADD COLUMN allow_messages_from VARCHAR(20) DEFAULT 'everyone'"),
-            ]
-            
-            with db.engine.connect() as conn:
-                for col_name, sql in user_migrations:
-                    if not column_exists('user', col_name):
-                        try:
-                            conn.execute(text(sql))
-                            conn.commit()
-                            migrations_applied.append(f"user.{col_name}")
-                        except Exception as e:
-                            if 'already exists' not in str(e).lower():
-                                print(f"[migration] Warning: Failed to add user.{col_name}: {e}")
-        
-        # MESSAGE TABLE MIGRATIONS
-        if table_exists('message'):
-            message_migrations = [
-                ("status", "ALTER TABLE message ADD COLUMN status VARCHAR(20) DEFAULT 'sent'"),
-                ("edited", "ALTER TABLE message ADD COLUMN edited BOOLEAN DEFAULT FALSE"),
-                ("message_type", "ALTER TABLE message ADD COLUMN message_type VARCHAR(20) DEFAULT 'text'"),
-                ("file_url", "ALTER TABLE message ADD COLUMN file_url VARCHAR(500)"),
-                ("file_name", "ALTER TABLE message ADD COLUMN file_name VARCHAR(255)"),
-                ("reply_to_id", "ALTER TABLE message ADD COLUMN reply_to_id INTEGER REFERENCES message(id)"),
-                ("pinned", "ALTER TABLE message ADD COLUMN pinned BOOLEAN DEFAULT FALSE"),
-                ("starred", "ALTER TABLE message ADD COLUMN starred BOOLEAN DEFAULT FALSE"),
-                ("deleted", "ALTER TABLE message ADD COLUMN deleted BOOLEAN DEFAULT FALSE"),
-                ("deleted_for", "ALTER TABLE message ADD COLUMN deleted_for VARCHAR(500)"),
-            ]
-            
-            with db.engine.connect() as conn:
-                for col_name, sql in message_migrations:
-                    if not column_exists('message', col_name):
-                        try:
-                            conn.execute(text(sql))
-                            conn.commit()
-                            migrations_applied.append(f"message.{col_name}")
-                        except Exception as e:
-                            if 'already exists' not in str(e).lower():
-                                print(f"[migration] Warning: Failed to add message.{col_name}: {e}")
-        
-        # CREATE MISSING TABLES
-        missing_tables = []
-        
-        if not table_exists('message_reaction'):
-            with db.engine.connect() as conn:
-                try:
-                    conn.execute(text("""
-                        CREATE TABLE IF NOT EXISTS message_reaction (
-                            id SERIAL PRIMARY KEY,
-                            message_id INTEGER NOT NULL REFERENCES message(id) ON DELETE CASCADE,
-                            username VARCHAR(100) NOT NULL,
-                            reaction VARCHAR(10) NOT NULL,
-                            timestamp TIMESTAMP DEFAULT NOW()
-                        )
-                    """))
-                    conn.commit()
-                    missing_tables.append('message_reaction')
-                except Exception as e:
-                    print(f"[migration] Warning: Failed to create message_reaction: {e}")
-        
-        if not table_exists('group_admin'):
-            with db.engine.connect() as conn:
-                try:
-                    conn.execute(text("""
-                        CREATE TABLE IF NOT EXISTS group_admin (
-                            id SERIAL PRIMARY KEY,
-                            group_name VARCHAR(100) NOT NULL,
-                            username VARCHAR(100) NOT NULL,
-                            role VARCHAR(50) DEFAULT 'member',
-                            can_add_members BOOLEAN DEFAULT FALSE,
-                            can_remove_members BOOLEAN DEFAULT FALSE,
-                            can_edit_info BOOLEAN DEFAULT FALSE,
-                            can_send_messages BOOLEAN DEFAULT TRUE,
-                            joined_at TIMESTAMP DEFAULT NOW(),
-                            UNIQUE(group_name, username)
-                        )
-                    """))
-                    conn.commit()
-                    missing_tables.append('group_admin')
-                except Exception as e:
-                    print(f"[migration] Warning: Failed to create group_admin: {e}")
-        
-        if not table_exists('device_session'):
-            with db.engine.connect() as conn:
-                try:
-                    conn.execute(text("""
-                        CREATE TABLE IF NOT EXISTS device_session (
-                            id SERIAL PRIMARY KEY,
-                            username VARCHAR(100) NOT NULL,
-                            device_name VARCHAR(100) NOT NULL,
-                            device_token VARCHAR(200) UNIQUE NOT NULL,
-                            paired_at TIMESTAMP DEFAULT NOW(),
-                            last_active TIMESTAMP DEFAULT NOW()
-                        )
-                    """))
-                    conn.commit()
-                    missing_tables.append('device_session')
-                except Exception as e:
-                    print(f"[migration] Warning: Failed to create device_session: {e}")
-        
-        if not table_exists('group_invitation'):
-            with db.engine.connect() as conn:
-                try:
-                    conn.execute(text("""
-                        CREATE TABLE IF NOT EXISTS group_invitation (
-                            id SERIAL PRIMARY KEY,
-                            group_name VARCHAR(100) NOT NULL,
-                            token VARCHAR(200) UNIQUE NOT NULL,
-                            created_by VARCHAR(100) NOT NULL,
-                            created_at TIMESTAMP DEFAULT NOW(),
-                            expires_at TIMESTAMP NOT NULL,
-                            max_uses INTEGER DEFAULT 1,
-                            current_uses INTEGER DEFAULT 0
-                        )
-                    """))
-                    conn.commit()
-                    missing_tables.append('group_invitation')
-                except Exception as e:
-                    print(f"[migration] Warning: Failed to create group_invitation: {e}")
-        
-        if not table_exists('call'):
-            with db.engine.connect() as conn:
-                try:
-                    conn.execute(text("""
-                        CREATE TABLE IF NOT EXISTS call (
-                            id SERIAL PRIMARY KEY,
-                            caller VARCHAR(100) NOT NULL,
-                            callee VARCHAR(100) NOT NULL,
-                            call_type VARCHAR(20) NOT NULL,
-                            status VARCHAR(20) DEFAULT 'initiated',
-                            started_at TIMESTAMP DEFAULT NOW(),
-                            ended_at TIMESTAMP,
-                            duration INTEGER DEFAULT 0
-                        )
-                    """))
-                    conn.commit()
-                    missing_tables.append('call')
-                except Exception as e:
-                    print(f"[migration] Warning: Failed to create call: {e}")
-        
-        if migrations_applied:
-            print(f"[migration] ✅ Added columns: {', '.join(migrations_applied)}")
-        if missing_tables:
-            print(f"[migration] ✅ Created tables: {', '.join(missing_tables)}")
-        if not migrations_applied and not missing_tables:
-            print("[migration] ✅ Schema up to date")
-        
+        engine = db.engine
+        inspector = inspect(engine)
+
+        # Older releases created these tables with a different naming convention.
+        # Keep an untouched backup, then copy every row that maps to the current model.
+        for table_name in (
+            'message_reaction', 'group_admin',
+            'device_session', 'group_invitation'
+        ):
+            if table_name in inspector.get_table_names():
+                _rebuild_legacy_table(table_name)
+                inspector = inspect(engine)
+
+        quote = engine.dialect.identifier_preparer.quote
+        for model_table in db.metadata.sorted_tables:
+            table_name = model_table.name
+            if table_name not in inspect(engine).get_table_names():
+                continue
+
+            existing_columns = {
+                column['name'] for column in inspect(engine).get_columns(table_name)
+            }
+            for column in model_table.columns:
+                if column.primary_key or column.name in existing_columns:
+                    continue
+
+                default_sql = _migration_default_sql(column, engine)
+                backfill_current_timestamp = (
+                    engine.dialect.name == 'sqlite'
+                    and default_sql == 'CURRENT_TIMESTAMP'
+                )
+                if backfill_current_timestamp:
+                    # SQLite cannot add a column with a non-constant default.
+                    default_sql = None
+
+                column_type = column.type.compile(dialect=engine.dialect)
+                definition = f'{quote(column.name)} {column_type}'
+                if default_sql is not None:
+                    definition += f' DEFAULT {default_sql}'
+                if not column.nullable and default_sql is not None:
+                    definition += ' NOT NULL'
+
+                for foreign_key in column.foreign_keys:
+                    target_table, target_column = foreign_key.target_fullname.rsplit('.', 1)
+                    definition += (
+                        f' REFERENCES {quote(target_table)} ({quote(target_column)})'
+                    )
+                    if foreign_key.ondelete:
+                        definition += f' ON DELETE {foreign_key.ondelete}'
+
+                with engine.begin() as connection:
+                    connection.execute(text(
+                        f'ALTER TABLE {quote(table_name)} '
+                        f'ADD COLUMN {definition}'
+                    ))
+                    if backfill_current_timestamp:
+                        connection.execute(text(
+                            f'UPDATE {quote(table_name)} '
+                            f'SET {quote(column.name)} = CURRENT_TIMESTAMP '
+                            f'WHERE {quote(column.name)} IS NULL'
+                        ))
+
+                existing_columns.add(column.name)
+                print(f'[migration] Added {table_name}.{column.name}')
+
+        print('[migration] Schema reconciliation complete')
         return True
-    except Exception as e:
-        print(f"[migration] ⚠️ Migration failed: {e}")
+    except Exception as error:
+        print(f'[migration] Schema reconciliation failed: {error}')
         return False
 
 
@@ -1695,7 +1698,7 @@ with app.app_context():
     except Exception:
         engine_name = None
     used_env = None
-    for k in ('DATABASE_URL', 'RAILWAY_DATABASE_URL', 'POSTGRES_URL', 'POSTGRESQL_URL', 'PG_URI', 'SQLALCHEMY_DATABASE_URI', 'DB_URL'):
+    for k in ('BB84_DB_URL', 'PRISMA_DATABASE_URL', 'DATABASE_URL', 'RAILWAY_DATABASE_URL', 'POSTGRES_URL', 'POSTGRESQL_URL', 'PG_URI', 'SQLALCHEMY_DATABASE_URI', 'DB_URL'):
         if os.environ.get(k):
             used_env = k
             break
@@ -1708,10 +1711,6 @@ with app.app_context():
     except Exception as e:
         print(f"[startup] DB connection test: FAILED - {e}")
 
-    # Temporarily disabled for faster startup - db.create_all() should handle schema
-    # added = _ensure_message_columns_exist()
-    # if added:
-    #     print(f"[startup] added message columns: {added}")
     print('[startup] Server starting...')
 
 # ------------------ Group Creation ------------------
@@ -1808,9 +1807,9 @@ def handle_get_group_history(data):
             if not group:
                 return
             
-            # Get messages where recipient is the group name (we store group messages with recipient=group_name)
+            # Match normalized messages and legacy rows that only stored the group name.
             messages = db.session.query(Message).filter(
-                Message.recipient == group_name
+                or_(Message.group_id == group.id, Message.recipient == group_name)
             ).order_by(Message.timestamp.asc()).all()
             
             history = []
@@ -1822,6 +1821,16 @@ def handle_get_group_history(data):
                     
                     reactions = MessageReaction.query.filter_by(message_id=msg.id).all()
                     reactions_list = [{"user": r.user, "emoji": r.emoji} for r in reactions]
+                    reply_preview = None
+                    reply_preview_sender = None
+                    if msg.reply_to_id:
+                        ref = db.session.get(Message, msg.reply_to_id)
+                        reply_group = _message_group(ref) if ref else None
+                        if reply_group and reply_group.id == group.id:
+                            reply_preview = xor_decrypt(
+                                ref.encrypted_message, get_shared_key("group", group_name)
+                            )
+                            reply_preview_sender = ref.sender
                     
                     history.append({
                         "id": msg.id,
@@ -1829,9 +1838,15 @@ def handle_get_group_history(data):
                         "message": decrypted_text,
                         "timestamp": msg.timestamp.isoformat(),
                         "status": msg.status,
+                        "edited": msg.edited,
                         "message_type": msg.message_type or "text",
                         "file_url": msg.file_url,
                         "file_name": msg.file_name,
+                        "reply_to_id": msg.reply_to_id,
+                        "reply_preview": reply_preview,
+                        "reply_preview_sender": reply_preview_sender,
+                        "pinned": msg.pinned or False,
+                        "starred": msg.starred or False,
                         "reactions": reactions_list
                     })
                 except Exception as e:
@@ -1863,16 +1878,37 @@ def handle_send_group_message(data):
             # Encrypt message with group key
             key = get_shared_key("group", group_name)
             encrypted = xor_encrypt_decrypt(message, key)
+
+            reply_to_id = None
+            reply_preview = None
+            reply_preview_sender = None
+            if data.get('reply_to_id'):
+                try:
+                    ref = Message.query.get(int(data.get('reply_to_id')))
+                    if ref and (
+                        ref.group_id == group.id or ref.recipient == group_name
+                    ):
+                        reply_to_id = ref.id
+                        reply_preview = xor_decrypt(
+                            ref.encrypted_message, get_shared_key('group', group_name)
+                        )
+                        reply_preview_sender = ref.sender
+                except (TypeError, ValueError):
+                    pass
+                except Exception as error:
+                    print(f"Could not load group reply preview: {error}")
             
             # Store message with recipient as group name
             msg = Message(
                 sender=sender,
                 recipient=group_name,
+                group_id=group.id,
                 encrypted_message=encrypted,
                 status='delivered',
                 message_type=message_type,
                 file_url=file_url,
-                file_name=file_name
+                file_name=file_name,
+                reply_to_id=reply_to_id
             )
             db.session.add(msg)
             db.session.commit()
@@ -1886,24 +1922,11 @@ def handle_send_group_message(data):
                 "message_type": message_type,
                 "file_url": file_url,
                 "file_name": file_name,
-                "reactions": []
+                "reactions": [],
+                "reply_to_id": msg.reply_to_id,
+                "reply_preview": reply_preview,
+                "reply_preview_sender": reply_preview_sender
             }
-            
-            # include reply preview when replying to a group message
-            reply_preview = None
-            reply_preview_sender = None
-            if data.get('reply_to_id'):
-                try:
-                    ref = Message.query.get(int(data.get('reply_to_id')))
-                    if ref:
-                        reply_preview = xor_decrypt(ref.encrypted_message, get_shared_key('group', group_name))
-                        reply_preview_sender = ref.sender
-                except Exception:
-                    reply_preview = None
-            if reply_preview:
-                msg_data['reply_to_id'] = data.get('reply_to_id')
-                msg_data['reply_preview'] = reply_preview
-                msg_data['reply_preview_sender'] = reply_preview_sender
             # Send to all group members who are online
             for member in group.members:
                 if member.username in online_users:
@@ -1932,11 +1955,11 @@ def handle_edit_message(data):
                 emit("error", {"message": "Cannot edit this message"})
                 return
             
-            # Re-encrypt with existing key
-            if msg.recipient:
-                key = get_shared_key(msg.sender, msg.recipient)
-            else:
-                key = get_shared_key("group", msg.recipient or "")
+            group = _message_group(msg)
+            key = (
+                get_shared_key("group", group.name)
+                if group else get_shared_key(msg.sender, msg.recipient or "")
+            )
             
             msg.encrypted_message = xor_encrypt_decrypt(new_text, key)
             msg.edited = True
@@ -1950,12 +1973,10 @@ def handle_edit_message(data):
                 "edited": True
             }
             
-            # Notify both users
-            if msg.recipient and msg.recipient != msg.sender:
-                if msg.sender in online_users:
-                    socketio.emit("message_edited", edit_data, room=online_users[msg.sender])
-                if msg.recipient in online_users:
-                    socketio.emit("message_edited", edit_data, room=online_users[msg.recipient])
+            for participant in _message_participant_usernames(msg):
+                participant_sid = online_users.get(participant)
+                if participant_sid:
+                    socketio.emit("message_edited", edit_data, room=participant_sid)
             
             print(f"Message {message_id} edited by {editor}")
     except Exception as e:
@@ -1983,8 +2004,14 @@ def handle_delete_message(data):
             
             if delete_for_everyone:
                 msg.deleted = True
-                msg.encrypted_message = xor_encrypt_decrypt("This message was deleted", 
-                                                           get_shared_key(msg.sender, msg.recipient or ""))
+                group = _message_group(msg)
+                key = (
+                    get_shared_key("group", group.name)
+                    if group else get_shared_key(msg.sender, msg.recipient or "")
+                )
+                msg.encrypted_message = xor_encrypt_decrypt(
+                    "This message was deleted", key
+                )
             else:
                 # Add user to deleted_for list
                 deleted_list = json.loads(msg.deleted_for) if msg.deleted_for else []
@@ -2001,11 +2028,10 @@ def handle_delete_message(data):
                 "deleter": deleter
             }
             
-            # Notify users
-            if msg.sender in online_users:
-                socketio.emit("message_deleted", delete_data, room=online_users[msg.sender])
-            if msg.recipient and msg.recipient in online_users:
-                socketio.emit("message_deleted", delete_data, room=online_users[msg.recipient])
+            for participant in _message_participant_usernames(msg):
+                participant_sid = online_users.get(participant)
+                if participant_sid:
+                    socketio.emit("message_deleted", delete_data, room=participant_sid)
             
             print(f"Message {message_id} deleted by {deleter}")
     except Exception as e:
@@ -2617,7 +2643,7 @@ def handle_get_group_admins(data):
             "can_add_members": True,
             "can_remove_members": True,
             "can_edit_group": True,
-            "appointed_at": group.created_at.isoformat() if hasattr(group, 'created_at') else None
+            "appointed_at": group.created_at.isoformat()
         })
         
         emit("group_admins", {"admins": admin_list})
@@ -2828,13 +2854,11 @@ def handle_get_user_profile(data):
             emit("user_profile", {"error": "User not found"})
             return
         
-        # Get mutual groups
-        user_groups = GroupAdmin.query.filter_by(username=username).all()
-        target_groups = GroupAdmin.query.filter_by(username=target_username).all()
-        
-        user_group_names = set(ga.group_name for ga in user_groups)
-        target_group_names = set(ga.group_name for ga in target_groups)
-        mutual_groups = list(user_group_names & target_group_names)
+        # Membership lives in the group_members association, not group_admin.
+        signed_in_user = User.query.filter_by(username=username).first()
+        user_group_names = {group.name for group in signed_in_user.groups} if signed_in_user else set()
+        target_group_names = {group.name for group in target_user.groups}
+        mutual_groups = sorted(user_group_names & target_group_names)
         
         # Check online status (check if user is in active_users)
         is_online = target_username in active_users
@@ -2935,7 +2959,17 @@ def handle_pin_message(data):
             emit("error", {"message": "Message not found"})
             return
 
-        if message.sender != username and message.recipient != username:
+        group = Group.query.filter_by(name=recipient).first() if is_group else None
+        if is_group:
+            is_group_message = group and (
+                message.group_id == group.id
+                or (message.group_id is None and message.recipient == group.name)
+            )
+            is_member = group and any(member.username == username for member in group.members)
+            if not is_group_message or not is_member:
+                emit("error", {"message": "You cannot pin this message"})
+                return
+        elif message.sender != username and message.recipient != username:
             emit("error", {"message": "You cannot pin this message"})
             return
         message.pinned = True
@@ -2950,14 +2984,12 @@ def handle_pin_message(data):
         # Store pinned status (you'd want a PinnedMessages table in production)
         # For now, emit to all participants
         if is_group:
-            # Get group members
-            admins = GroupAdmin.query.filter_by(group_name=recipient).all()
-            for admin in admins:
-                if admin.username in online_users:
+            for member in group.members:
+                if member.username in online_users:
                     emit("message_pinned", {
                         "message_id": message_id,
                         "chat_id": chat_id
-                    }, room=online_users[admin.username])
+                    }, room=online_users[member.username])
         else:
             # Emit to both users
             if username in online_users:
@@ -2993,19 +3025,34 @@ def handle_unpin_message(data):
         else:
             chat_id = "_".join(sorted([username, recipient]))
         
-        # Emit to all participants
         message = Message.query.get(message_id)
-        if message and (message.sender == username or message.recipient == username):
-            message.pinned = False
-            db.session.commit()
+        if not message:
+            emit("error", {"message": "Message not found"})
+            return
+
+        group = Group.query.filter_by(name=recipient).first() if is_group else None
         if is_group:
-            admins = GroupAdmin.query.filter_by(group_name=recipient).all()
-            for admin in admins:
-                if admin.username in online_users:
+            is_group_message = group and (
+                message.group_id == group.id
+                or (message.group_id is None and message.recipient == group.name)
+            )
+            is_member = group and any(member.username == username for member in group.members)
+            if not is_group_message or not is_member:
+                emit("error", {"message": "You cannot unpin this message"})
+                return
+        elif message.sender != username and message.recipient != username:
+            emit("error", {"message": "You cannot unpin this message"})
+            return
+
+        message.pinned = False
+        db.session.commit()
+        if is_group:
+            for member in group.members:
+                if member.username in online_users:
                     emit("message_unpinned", {
                         "message_id": message_id,
                         "chat_id": chat_id
-                    }, room=online_users[admin.username])
+                    }, room=online_users[member.username])
         else:
             if username in online_users:
                 emit("message_unpinned", {
@@ -3028,5 +3075,3 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     print(f'[startup] Starting server on port {port}')
     socketio.run(app, host="0.0.0.0", port=port, debug=False)
-
-

@@ -5,13 +5,15 @@ This script creates all necessary database tables.
 """
 
 import os
-from app import app, db
+from app import app, db, migrate_database_schema
 
 def init_database():
     """Initialize the database tables"""
     with app.app_context():
         print("Creating database tables...")
         db.create_all()
+        if not migrate_database_schema():
+            raise RuntimeError("Database schema reconciliation failed")
         print("✓ Database tables created successfully!")
         
         # Print database info
